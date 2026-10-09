@@ -61,13 +61,25 @@ export async function launch(options = {}) {
   }
 }
 
+// Pixel sizes of the sim page layout (src/sim/sim.html): header, main padding and gaps, tile padding and label.
+const LAYOUT = { header: 36, pad: 10, gap: 10, tilePad: 4, label: 22, scrollbar: 16 };
+
+/**
+ * A viewport that shows the screen and, beside it, two phones in either orientation without scrolling:
+ * portrait phones side by side, landscape phones one above the other. More phones wrap below (Device input
+ * scrolls the page as needed).
+ */
 function defaultViewport({ screenSize = { width: 1280, height: 720 }, phoneSize = { width: 360, height: 640 }, scale = 1 }) {
-  // Room for the screen and two portrait phones side by side; more phones wrap below (the page scrolls).
-  const short = Math.min(phoneSize.width, phoneSize.height) * scale;
-  const long = Math.max(phoneSize.width, phoneSize.height) * scale;
+  const { header, pad, gap, tilePad, label, scrollbar } = LAYOUT;
+  const tileW = (w) => Math.ceil(w * scale) + 2 * tilePad;
+  const tileH = (h) => Math.ceil(h * scale) + 2 * tilePad + label;
+  const short = Math.min(phoneSize.width, phoneSize.height);
+  const long = Math.max(phoneSize.width, phoneSize.height);
+  const phonesWidth = Math.max(2 * tileW(short) + gap, tileW(long));
+  const phonesHeight = Math.max(tileH(long), 2 * tileH(short) + gap);
   return {
-    width: Math.ceil(screenSize.width * scale + 2 * (short + 18) + 40),
-    height: Math.ceil(Math.max(screenSize.height * scale, long) + 100),
+    width: 2 * pad + tileW(screenSize.width) + gap + phonesWidth + scrollbar,
+    height: header + 2 * pad + Math.max(tileH(screenSize.height), phonesHeight),
   };
 }
 

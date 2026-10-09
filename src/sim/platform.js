@@ -11,6 +11,9 @@
   'use strict';
 
   var SCREEN = 0;
+  // Games may not go fullscreen: a fullscreen screen frame would cover the phones (Unity WebGL requests it).
+  // With 'none', document.fullscreenEnabled is false in the frame and engines skip the request quietly.
+  var FRAME_POLICY = "autoplay; fullscreen 'none'";
   var query = new URLSearchParams(location.search);
   var injected = window.__AC_PLAYTEST_CONFIG__ || {};
 
@@ -318,7 +321,7 @@
     var frame = document.createElement('iframe');
     frame.id = 'ac-phone-' + id;
     frame.className = 'ac-device-frame';
-    frame.setAttribute('allow', 'autoplay; fullscreen');
+    frame.setAttribute('allow', FRAME_POLICY);
     frame.src = '/controller.html';
     frames[id] = frame;
     emit('join', { device: id, nickname: profiles[id].nickname });
@@ -480,7 +483,7 @@
     var screen = document.createElement('iframe');
     screen.id = 'ac-screen';
     screen.className = 'ac-device-frame';
-    screen.setAttribute('allow', 'autoplay; fullscreen');
+    screen.setAttribute('allow', FRAME_POLICY);
     screen.src = '/screen.html';
     frames[SCREEN] = screen;
     $('ac-screen-box').appendChild(screen);

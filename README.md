@@ -106,6 +106,7 @@ reconnect buttons, and there is a live event log. `http://localhost:8080/` redir
 | `readyTimeout` | `60000` | ms to wait for the screen's `new AirConsole()` |
 | `timeout` | `10000` | default for the `waitFor*` helpers |
 | `screenSize`, `phoneSize`, `scale` | 1280×720, 360×640, 1 | frame sizes (CSS px); phones rotate on `setOrientation` |
+| `viewport` | fits screen + 2 phones | the screen plus two phones beside it, in either orientation, without scrolling |
 | `code` | `'1234 5678'` | join code passed to `onReady` |
 | `adDuration`, `adFill` | `2500`, `true` | ad behaviour |
 | `latency` | `0` | extra ms on every platform → device message |
@@ -132,7 +133,7 @@ reconnect buttons, and there is a live event log. `http://localhost:8080/` redir
 | `ads()` | one entry per `showAd()`: `{ requestedAt, shown, completedAt }` |
 | `consoleErrors({ ignore })`, `consoleMessages()` | console errors, uncaught exceptions and API-reported errors, from every frame |
 | `screenshot(file, { of: 'page' \| 'screen' \| id })` | PNG |
-| `state()` | platform snapshot: devices, players, paused, master, high scores, persistent data |
+| `await state()` | platform snapshot (a Promise): devices, players, paused, master, high scores, persistent data |
 | `page`, `context`, `browser`, `cdp()` | Playwright escape hatches |
 | `close()` | |
 
@@ -143,6 +144,9 @@ Event types: `ready`, `join`, `connect`, `disconnect`, `message`, `custom`, `pla
 `request`/`show`/`complete`), `pause`, `resume`, `premium`, `profile`, `navigate`, `vibrate`, `orientation`,
 `immersive`, `highScoreStored`, `highScores`, `persistentStore`, `persistentRequest`, `jserror`, `set`.
 
+Taps and drags work on any phone, wherever it sits on the sim page: the page is scrolled to bring the target
+into the viewport first (games' `position: fixed` layouts can't do that themselves).
+
 Events reach Node asynchronously. Use `waitFor*` instead of sleeping. To avoid matching something old, take
 `const since = sim.mark()` *before* the action that triggers it.
 
@@ -152,11 +156,12 @@ Events reach Node asynchronously. Use `waitFor*` instead of sleeping. To avoid m
 | --- | --- |
 | `id`, `frame`, `page`, `frameElement` | Playwright `Frame` of the device; the sim `Page`; its `<iframe>` locator |
 | `tap(target, { pointerType })` | `target`: visible text, a selector (`#id`, `.cls`, `[attr]`, `css=`, `text=`, `role=`, `xpath=`), a Locator, or `{ x, y }` in device CSS px. Touch by default, `'mouse'` optional |
-| `drag(from, to, { steps, duration, hold, pointerType })` | trusted touch (or mouse) drag; points or elements |
+| `drag(from, to, { steps, duration, hold, pointerType })` | trusted touch (or mouse) drag; points or elements. Both ends must fit in the viewport at once |
 | `locator(target)` | Playwright Locator in the device frame |
 | `evaluate(fn, arg)` | run code in the device frame, e.g. `sim.screen.evaluate(() => airconsole.getMasterControllerDeviceId())` |
 | `send(data, to)` | inject a message as if this device sent it |
-| `messages(filter)`, `lastMessage(filter)`, `sent(filter)`, `waitForMessage(filter, opts)` | per-device views of the message log |
+| `messages(filter)`, `lastMessage(filter)`, `waitForMessage(filter, opts)` | messages **delivered to** this device (sent to it, or broadcast by another device). To wait for what a phone *sends*, use `sim.waitForMessage({ from: phone.id })` |
+| `sent(filter)` | messages this device sent |
 | `screenshot(file)` | PNG of this frame |
 
 ### In a test runner
@@ -268,6 +273,7 @@ library (`npm run test:official`).
 | network | optional fixed latency; no jitter, loss or `slow_connection` changes |
 | defaults | join code `1234 5678`; phones start in portrait until the controller sets an orientation (the real default is unverified) |
 | silenced phones | an overlay in the sim; whatever AirConsole shows them is not reproduced |
+| fullscreen | game frames may not go fullscreen (`document.fullscreenEnabled` is false), so a game can't cover the other devices; what AirConsole's frames allow is unverified |
 
 ### Not modelled
 

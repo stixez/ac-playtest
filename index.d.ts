@@ -28,7 +28,7 @@ export interface LaunchOptions {
   readyTimeout?: number;
   /** Default timeout of the waitFor* helpers in ms. Default 10000. */
   timeout?: number;
-  /** Browser viewport; default fits the screen and two phones. */
+  /** Browser viewport; default fits the screen and two phones beside it, in either orientation. */
   viewport?: Size;
   /** Server log lines (404s, API version notes). */
   log?: (line: string) => void;
@@ -140,7 +140,11 @@ export class Device {
   locator(target: Target): Locator;
   tap(target: Target | Point, options?: TapOptions): Promise<void>;
   drag(from: Target | Point, to: Target | Point, options?: DragOptions): Promise<void>;
-  toPage(target: Target | Point): Promise<Point>;
+  /** Sim-page viewport coordinates of a point or element centre; scrolls the sim page until it is visible. */
+  toPage(target: Target | Point, options?: { timeout?: number }): Promise<Point>;
+  /** Like toPage(), without scrolling. */
+  pagePoint(target: Target | Point): Promise<Point>;
+  inViewport(point: Point): boolean;
   evaluate<R, A = undefined>(fn: (arg: A) => R | Promise<R>, arg?: A): Promise<R>;
   /** Sends as if this device called airconsole.message(to, data). Default `to`: screen (phones), all (screen). */
   send(data: unknown, to?: number): Promise<void>;
@@ -149,6 +153,7 @@ export class Device {
   /** Messages this device sent. */
   sent(filter?: MessageFilter): SimMessage[];
   lastMessage(filter?: MessageFilter): SimMessage | undefined;
+  /** Waits for a message delivered TO this device; for messages it sends, use sim.waitForMessage({from: id}). */
   waitForMessage(filter?: MessageFilter, options?: WaitOptions): Promise<SimMessage>;
   screenshot(file?: string): Promise<Buffer>;
 }

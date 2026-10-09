@@ -45,7 +45,8 @@ export class Device {
   }
 
   /**
-   * Taps an element (see locator()) or a point `{x, y}` in this device's CSS pixels.
+   * Taps an element (see locator()) or a point `{x, y}` in this device's CSS pixels. The sim page is scrolled
+   * first if needed, so this works for any phone wherever it sits on the page.
    * @param {string | import('playwright-core').Locator | {x: number, y: number}} target
    * @param {{pointerType?: 'touch' | 'mouse', timeout?: number}} [opts]
    */
@@ -57,6 +58,9 @@ export class Device {
       return;
     }
     const loc = this.locator(target);
+    await loc.waitFor({ state: 'visible', timeout });
+    await this.toPage(loc, { timeout });
+    // Playwright's tap/click still does its checks (enabled, stable, receives events) on the now visible element.
     if (pointerType === 'mouse') await loc.click({ timeout });
     else await loc.tap({ timeout });
   }
@@ -69,8 +73,13 @@ export class Device {
    *   hold: ms to wait at the end point before releasing (default 0).
    */
   async drag(from, to, { steps = 10, duration = 250, hold = 0, pointerType = 'touch' } = {}) {
-    const a = await this.toPage(from);
+    await this.toPage(from);
     const b = await this.toPage(to);
+    const a = await this.pagePoint(from); // revealing `to` may have scrolled the page
+    if (!this.inViewport(a)) {
+      throw new Error(`device ${this.id}: both ends of the drag must fit in the viewport at once; pass a bigger ` +
+        'viewport to launch()');
+    }
     const pause = (ms) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : null);
     const at = (i) => ({ x: a.x + ((b.x - a.x) * i) / steps, y: a.y + ((b.y - a.y) * i) / steps });
     if (pointerType === 'mouse') {
@@ -99,21 +108,44 @@ export class Device {
     await touch('touchEnd', null);
   }
 
-  /** Maps a point in device CSS pixels, or an element's centre, to sim-page viewport coordinates. */
-  async toPage(target) {
+  /**
+   * Maps a point in device CSS pixels, or an element's centre, to sim-page viewport coordinates, scrolling the sim
+   * page until it is inside the viewport. Needed because an element in a game's `position: fixed` layout (common in
+   * controllers) cannot scroll the outer page into view by itself.
+   */
+  async toPage(target, { timeout } = {}) {
+    if (!isPoint(target)) await this.locator(target).scrollIntoViewIfNeeded({ timeout }); // inside the frame
+    await this.frameElement.evaluate((el) => el.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
+    let p = await this.pagePoint(target);
+    if (!this.inViewport(p)) {
+      const vp = this.page.viewportSize();
+      await this.page.evaluate(([dx, dy]) => window.scrollBy(dx, dy), [p.x - vp.width / 2, p.y - vp.height / 2]);
+      p = await this.pagePoint(target);
+      if (!this.inViewport(p)) {
+        throw new Error(`device ${this.id}: ${describe(target)} is at (${Math.round(p.x)}, ${Math.round(p.y)}), ` +
+          `outside the ${vp.width}x${vp.height} viewport even after scrolling`);
+      }
+    }
+    return p;
+  }
+
+  /** Like toPage(), without scrolling. */
+  async pagePoint(target) {
     if (isPoint(target)) {
-      const frameEl = this.frameElement;
-      await frameEl.scrollIntoViewIfNeeded();
-      const box = await frameEl.boundingBox();
+      const box = await this.frameElement.boundingBox();
       const innerWidth = await this.frame.evaluate(() => window.innerWidth);
       const scale = box.width / innerWidth;
       return { x: box.x + target.x * scale, y: box.y + target.y * scale };
     }
-    const loc = this.locator(target);
-    await loc.scrollIntoViewIfNeeded();
-    const box = await loc.boundingBox();
-    if (!box) throw new Error(`device ${this.id}: ${String(target)} is not visible`);
+    const box = await this.locator(target).boundingBox();
+    if (!box) throw new Error(`device ${this.id}: ${describe(target)} is not visible`);
     return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  }
+
+  /** Whether a sim-page point is inside the viewport. */
+  inViewport(p) {
+    const vp = this.page.viewportSize();
+    return !vp || (p.x >= 0 && p.y >= 0 && p.x < vp.width && p.y < vp.height);
   }
 
   /** Runs a function in this device's frame (Playwright frame.evaluate). */
@@ -141,7 +173,10 @@ export class Device {
     return this.messages(filter).at(-1);
   }
 
-  /** Waits for a message to this device. Same options as sim.waitForMessage. */
+  /**
+   * Waits for a message delivered TO this device (same options as sim.waitForMessage). For messages this device
+   * sends, use sim.waitForMessage({from: id}).
+   */
   waitForMessage(filter, opts) {
     const match = messageMatcher(filter);
     return this.sim.waitForMessage((m) => messageMatcher({ to: this.id })(m) && match(m), opts);
@@ -152,6 +187,10 @@ export class Device {
     if (file) await fs.mkdir(path.dirname(path.resolve(file)), { recursive: true });
     return this.frameElement.screenshot({ path: file });
   }
+}
+
+function describe(target) {
+  return typeof target === 'string' || isPoint(target) ? JSON.stringify(target) : String(target);
 }
 
 function isPoint(v) {
