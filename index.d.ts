@@ -4,8 +4,10 @@ import type { Browser, BrowserContext, CDPSession, Frame, Locator, Page } from '
 export interface Size { width: number; height: number }
 
 export interface LaunchOptions {
-  /** Build folder with screen.html and controller.html. */
+  /** Build folder with screen.html and controller.html; with `path`, the web root above the game. */
   build: string;
+  /** The game's folder inside `build`, e.g. 'example-premium/', for games that load ../shared files. */
+  path?: string;
   /** Phones to connect before launch() resolves. Default 0. */
   phones?: number;
   /** Default true. */
@@ -206,6 +208,8 @@ export function launch(options: LaunchOptions): Promise<Sim>;
 
 export interface ServerOptions {
   build: string;
+  /** The game's folder inside `build`. Default ''. */
+  path?: string;
   /** Default 8080; 0 picks a free port. */
   port?: number;
   /** Default '127.0.0.1'. */
@@ -217,6 +221,8 @@ export interface ServerOptions {
 
 export interface Server {
   root: string;
+  /** The game's folder inside root ('' or 'a/b/'). */
+  gamePath: string;
   port: number;
   origin: string;
   simUrl: string;
@@ -226,6 +232,8 @@ export interface Server {
 
 export function startServer(options: ServerOptions): Promise<Server>;
 export function checkBuildDir(dir: string): string;
+/** '' or 'a/b/'; throws if the path would leave the served root. */
+export function normalizeGamePath(gamePath?: string): string;
 export function rewriteApiTags(html: string, apiVersion?: string): { html: string; versions: string[] };
 export const IMPLEMENTED_API_VERSION: string;
 

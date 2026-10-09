@@ -30,6 +30,18 @@ const TYPES = {
 };
 const ENCODINGS = { '.br': 'br', '.gz': 'gzip' };
 
+/**
+ * Normalises the game's folder inside the served root ('' or 'a/b/'). Throws if it would leave the root.
+ * @param {string} [gamePath]
+ */
+export function normalizeGamePath(gamePath = '') {
+  const parts = String(gamePath).replace(/\\/g, '/').split('/').filter((part) => part && part !== '.');
+  if (parts.includes('..') || /^[a-z]:/i.test(parts[0] || '')) {
+    throw new Error(`The game path must be a folder inside the served root, not "${gamePath}"`);
+  }
+  return parts.length ? parts.join('/') + '/' : '';
+}
+
 /** Throws a readable error unless `dir` looks like an AirConsole build (screen.html + controller.html). */
 export function checkBuildDir(dir) {
   const root = path.resolve(dir);
@@ -57,15 +69,21 @@ export function rewriteApiTags(html, apiVersion) {
 /**
  * Starts the server. Resolves once it listens.
  * @param {object} opts
- * @param {string} opts.build             build folder (screen.html + controller.html)
+ * @param {string} opts.build             folder to serve; the game's screen.html + controller.html are in it, or in
+ *                                        `opts.path` below it
+ * @param {string} [opts.path='']         the game's folder inside `build`, e.g. 'example-premium/'; lets a game load
+ *                                        shared files from parent folders (`../styles/x.css`)
  * @param {number} [opts.port=8080]       0 picks a free port
  * @param {string} [opts.host='127.0.0.1']
  * @param {string} [opts.apiVersion]      version the stand-in reports (default: the one in the game's script tag)
  * @param {'builtin'|'official'} [opts.api='builtin']  'official' fetches the real library from airconsole.com
  * @param {(line: string) => void} [opts.log]
  */
-export async function startServer({ build, port = 8080, host = '127.0.0.1', apiVersion, api = 'builtin', log = () => {} } = {}) {
-  const root = checkBuildDir(build);
+export async function startServer({ build, path: subPath = '', port = 8080, host = '127.0.0.1', apiVersion, api = 'builtin', log = () => {} } = {}) {
+  if (!build) throw new Error('No build folder given');
+  const gamePath = normalizeGamePath(subPath);
+  const root = path.resolve(build);
+  checkBuildDir(path.join(root, gamePath));
   const officialCache = new Map();
   const seenVersions = new Set();
 
@@ -174,11 +192,14 @@ export async function startServer({ build, port = 8080, host = '127.0.0.1', apiV
   });
   const actualPort = server.address().port;
   const origin = `http://${host.includes(':') ? `[${host}]` : host}:${actualPort}`;
+  const gameQuery = gamePath ? '?' + new URLSearchParams({ path: gamePath }) : '';
   return {
     root,
+    /** The game's folder inside root ('' or 'a/b/'). */
+    gamePath,
     port: actualPort,
     origin,
-    simUrl: origin + SIM_PATH,
+    simUrl: origin + SIM_PATH + gameQuery,
     /** API versions found in the game's script tags so far. */
     apiVersions: () => [...seenVersions],
     close: () => new Promise((resolve) => {

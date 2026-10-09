@@ -1,21 +1,35 @@
 {
   "name": "ac-playtest",
   "version": "0.1.0",
-  "description": "Unofficial offline, scriptable playtest harness for AirConsole games: a local AirConsole platform simulator plus a Playwright scripting API for CI.",
+  "description": "Unofficial offline playtest harness for AirConsole games: simulate a TV screen and any number of phones locally, and script full multiplayer sessions with Playwright in CI.",
   "type": "module",
   "private": false,
   "license": "MIT",
   "author": "Zvonimir",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stixez/ac-playtest.git"
+  },
+  "homepage": "https://github.com/stixez/ac-playtest#readme",
+  "bugs": {
+    "url": "https://github.com/stixez/ac-playtest/issues"
+  },
   "keywords": [
     "airconsole",
     "playtest",
-    "simulator",
     "playwright",
-    "e2e",
-    "testing",
+    "e2e-testing",
+    "game-testing",
     "unity",
     "webgl",
-    "html5-games"
+    "html5-games",
+    "multiplayer",
+    "local-multiplayer",
+    "simulator",
+    "testing-tools",
+    "ci",
+    "e2e",
+    "testing"
   ],
   "bin": {
     "ac-playtest": "bin/ac-playtest.js"

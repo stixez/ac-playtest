@@ -1,9 +1,15 @@
 # ac-playtest
 
+[![CI](https://github.com/stixez/ac-playtest/actions/workflows/ci.yml/badge.svg)](https://github.com/stixez/ac-playtest/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
+
 **Offline, scriptable playtests for [AirConsole](https://www.airconsole.com) games.** It runs a local
 simulation of the AirConsole platform (one TV screen plus any number of phones) in Chromium. You can play
 in it by hand, or script whole sessions with [Playwright](https://playwright.dev) and run them in CI: phones
 joining and leaving, taps and drags on the real controller UI, pause/resume and ads.
+
+![The sim page: the TV screen of a small example game and two phones, one of them after a drag on its touch pad](docs/hero.png)
 
 > **Unofficial.** ac-playtest is not affiliated with or endorsed by AirConsole / N-Dream AG. AirConsole is a
 > trademark of its owner. It ships its own independently written stand-in for the AirConsole JS API and does not bundle
@@ -73,8 +79,10 @@ try {
 ```
 ac-playtest serve <buildDir> [options]
 
-  <buildDir> must contain screen.html and controller.html.
+  <buildDir> must contain screen.html and controller.html (or the --path folder below it must).
 
+  --path <dir>        the game's folder inside <buildDir>, for games that load shared files from parent
+                      folders (../styles/...); <buildDir> is then the web root
   --port <n>          port (default 8080; 0 = any free port)
   --host <addr>       interface to bind (default 127.0.0.1)
   --phones <n>        phones that join when the page opens (default 2)
@@ -96,7 +104,8 @@ reconnect buttons, and there is a live event log. `http://localhost:8080/` redir
 
 | option | default | |
 | --- | --- | --- |
-| `build` | (required) | folder with `screen.html` and `controller.html` |
+| `build` | (required) | folder with `screen.html` and `controller.html`; with `path`, the web root above the game |
+| `path` | `''` | the game's folder inside `build`, e.g. `'example-premium/'`, for games that load `../shared` files |
 | `phones` | `0` | phones connected before `launch` resolves |
 | `headless` | `true` | |
 | `api` | `'builtin'` | `'official'` loads the real library from airconsole.com |
@@ -208,6 +217,27 @@ runners also have Google Chrome preinstalled, which ac-playtest uses as a fallba
 - WebGL in headless Chromium renders in software (SwiftShader). It is fine for logic and crash testing; don't
   judge frame rates by it.
 
+## Tested with
+
+| Game | API mode | Result |
+| --- | --- | --- |
+| A Unity WebGL game: Unity 6, AirConsole Unity plugin 2.6, landscape controllers, Brotli build | built-in and official | Full scripted matches pass in both modes: lobby, START, 10 slingshot shots by touch drag, mid-flight taps, drop/reconnect, pause/resume, no console errors. Dogfooding it found two harness bugs (input on phones outside the viewport; Unity taking the frame fullscreen), both fixed with tests. Its first run caught a real WebGL-only crash in the game |
+| [airconsole-scaffold](https://github.com/AirConsole/airconsole-scaffold) | built-in and official | Passes: connect log, message and reply, the cube, disconnect |
+| [airconsole-api-examples](https://github.com/AirConsole/airconsole-api-examples) (overview, device states, premium, profile, persistent data; served with `path`) | built-in and official | Device states, premium and profile behave as intended. The two modes produced identical event logs, screen/phone text and console errors, except for the profile-picture URL (local SVG vs airconsole.com) |
+
+Honest notes:
+
+- The persistent-data example throws `A valid array of uids must be provided on the screen` in **both** modes. It
+  calls `requestPersistentData()` / `storePersistentData()` on the screen without uids, which API 1.9+ rejects.
+  The example predates that change; it is not a simulator bug, and it shows the official client agreeing with the
+  stand-in.
+- The examples' overview logs `Path does not exist!` for its "Active Players" entry, which has no target folder
+  (also in both modes).
+- The examples load jQuery, fonts and CSS from CDNs, so they need the internet even with the built-in API. Your
+  own game runs offline if it bundles its assets.
+- Only Chromium has been used. Phaser, Construct and other HTML5 engines use the same JS API and should work, but
+  haven't been tried on a real project yet. Reports are welcome.
+
 ## How it works
 
 ```
@@ -290,9 +320,8 @@ library (`npm run test:official`).
 
 ## Limitations
 
-- **Tested engines.** So far it has been used on a real Unity WebGL game (Unity 6, AirConsole Unity plugin 2.6)
-  and on the plain-HTML example game. Other engines (Phaser, Construct, plain HTML5 games) should work, since
-  they use the same JS API, but haven't been tried on a real project yet. Reports welcome.
+- **Tested games.** A Unity WebGL game and AirConsole's own plain-HTML scaffold and API examples (see
+  [Tested with](#tested-with)). Other engines haven't been tried on a real project yet.
 - Chromium only (Playwright's Chromium or Google Chrome); trusted touch input uses the Chrome DevTools
   Protocol.
 - One session per sim. Run several sims for several sessions.

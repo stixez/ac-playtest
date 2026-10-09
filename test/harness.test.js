@@ -138,6 +138,28 @@ test('pre-compressed files decode in the browser (Content-Encoding br / gzip)', 
   assert.deepEqual(got, [{ hello: 'brotli' }, { hello: 'brotli' }]);
 });
 
+test('a game in a subfolder (path option) runs with its shared ../ assets', async (t) => {
+  const screen = fs.readFileSync(path.join(DUMMY, 'screen.html'), 'utf8')
+    .replace('</head>', '<link rel="stylesheet" href="../shared/look.css"><script src="../shared/lib.js"></script></head>');
+  const controller = fs.readFileSync(path.join(DUMMY, 'controller.html'), 'utf8')
+    .replace('</head>', '<script src="../shared/lib.js"></script></head>');
+  const root = tempBuild({
+    'shared/look.css': 'h1 { color: rgb(255, 0, 0); }',
+    'shared/lib.js': 'window.sharedLib = "loaded";',
+    'game-a/screen.html': screen,
+    'game-a/controller.html': controller,
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const sim = await newSim(t, { build: root, path: 'game-a/', phones: 1 });
+  assert.match(sim.screen.frame.url(), /\/game-a\/screen\.html$/);
+  assert.equal(await sim.screen.evaluate(() => getComputedStyle(document.querySelector('h1')).color), 'rgb(255, 0, 0)');
+  const [phone] = sim.phones();
+  assert.equal(await phone.evaluate(() => window.sharedLib), 'loaded');
+  await phone.tap('Tap me');
+  await phone.waitForMessage({ type: 'echo' });
+  assert.deepEqual(sim.consoleErrors(), []);
+});
+
 test('launch fails with a clear message when the screen never creates an AirConsole object', async (t) => {
   const build = tempBuild({ 'screen.html': '<p>no api here</p>', 'controller.html': '<p>nor here</p>' });
   t.after(() => fs.rmSync(build, { recursive: true, force: true }));

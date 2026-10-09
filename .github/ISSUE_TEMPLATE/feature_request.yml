@@ -1,0 +1,21 @@
+name: Feature request
+description: Something ac-playtest should simulate or make scriptable
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to test?
+      description: The playtest scenario, and what is missing or awkward today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help?
+      description: An API sketch, a CLI flag, a platform behaviour to model...
+  - type: textarea
+    id: fidelity
+    attributes:
+      label: How does real AirConsole behave here?
+      description: If this is about simulating the platform, links to the docs or observations help a lot.

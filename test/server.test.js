@@ -7,7 +7,7 @@ import path from 'node:path';
 import http from 'node:http';
 import zlib from 'node:zlib';
 import { spawn } from 'node:child_process';
-import { startServer, checkBuildDir, rewriteApiTags } from '../src/index.js';
+import { startServer, checkBuildDir, rewriteApiTags, normalizeGamePath } from '../src/index.js';
 import { ROOT, DUMMY } from './support/helpers.js';
 
 function tempBuild(files) {
@@ -102,6 +102,30 @@ test('server: encodings, MIME types, no-store, HTML rewrite, sim routes, travers
   assert.equal(head.body.length, 0);
 });
 
+test('server: a game in a subfolder (path option) can load shared files from the parent folder', async (t) => {
+  const root = tempBuild({
+    'shared/style.css': 'body { color: red; }',
+    'games/one/screen.html': '<link rel="stylesheet" href="../../shared/style.css">' +
+      '<script src="https://www.airconsole.com/api/airconsole-1.11.0.js"></script>',
+    'games/one/controller.html': '<p>controller</p>',
+    'secret.txt': 'outside',
+  });
+  const server = await startServer({ build: root, path: './games//one', port: 0 });
+  t.after(async () => { await server.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  assert.equal(server.gamePath, 'games/one/');
+  assert.equal(server.simUrl, `${server.origin}/__ac/sim.html?path=games%2Fone%2F`);
+  const screen = await raw(server.port, '/games/one/screen.html');
+  assert.match(screen.body.toString(), /src="\/__ac\/api\/airconsole-1\.11\.0\.js"/);
+  assert.equal((await raw(server.port, '/shared/style.css')).status, 200);
+  assert.equal((await raw(server.port, '/games/one/..%2f..%2f..%2fpackage.json')).status, 403);
+
+  assert.equal(normalizeGamePath(''), '');
+  assert.equal(normalizeGamePath('/a\\b/'), 'a/b/');
+  assert.throws(() => normalizeGamePath('a/../../x'), /inside the served root/);
+  await assert.rejects(startServer({ build: root, path: 'games', port: 0 }), /missing screen\.html and controller\.html/);
+  await assert.rejects(startServer({ build: root, path: '../', port: 0 }), /inside the served root/);
+});
+
 test('server: a busy port gives a helpful error', async (t) => {
   const first = await startServer({ build: DUMMY, port: 0 });
   t.after(() => first.close());
@@ -131,6 +155,21 @@ test('cli: serve prints the sim URL and serves the build until stopped', async (
   const res = await raw(Number(url.port), '/controller.html');
   assert.equal(res.status, 200);
   assert.match(res.body.toString(), /\/__ac\/api\/airconsole-1\.11\.0\.js/);
+  run.child.kill('SIGTERM');
+  assert.equal(await run.exited, 0);
+});
+
+test('cli: serve --path puts the game folder in the sim URL', async () => {
+  const run = cli(['serve', 'examples', '--path', 'dummy-game', '--port', '0']);
+  const deadline = Date.now() + 10000;
+  let match;
+  while (!(match = /sim: {2}(http:\/\/\S+)/.exec(run.output())) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.ok(match, run.output());
+  const url = new URL(match[1]);
+  assert.equal(url.searchParams.get('path'), 'dummy-game/');
+  assert.equal((await raw(Number(url.port), '/dummy-game/controller.html')).status, 200);
   run.child.kill('SIGTERM');
   assert.equal(await run.exited, 0);
 });

@@ -9,9 +9,11 @@ const HELP = `ac-playtest: offline playtests for AirConsole games (unofficial)
 Usage:
   ac-playtest serve <buildDir> [options]
 
-  <buildDir> must contain screen.html and controller.html.
+  <buildDir> must contain screen.html and controller.html (or --path must point to a folder below it that does).
 
 Options:
+  --path <dir>          the game's folder inside <buildDir>, e.g. example-premium/, for games that load shared
+                        files from parent folders (../styles/...); <buildDir> is then the web root
   --port <n>            port to listen on (default 8080, 0 = any free port)
   --host <addr>         interface to bind (default 127.0.0.1)
   --phones <n>          phones that join when the page opens (default 2)
@@ -31,6 +33,7 @@ export async function main(argv) {
     allowPositionals: true,
     options: {
       port: { type: 'string', default: '8080' },
+      path: { type: 'string', default: '' },
       host: { type: 'string', default: '127.0.0.1' },
       phones: { type: 'string', default: '2' },
       scale: { type: 'string', default: '0.5' },
@@ -61,14 +64,15 @@ export async function main(argv) {
   if (!(scale > 0 && scale <= 4)) throw new Error('--scale must be a number between 0 and 4');
 
   const server = await startServer({
-    build: buildDir, port, host: values.host, apiVersion: values['api-version'],
+    build: buildDir, path: values.path, port, host: values.host, apiVersion: values['api-version'],
     api: values['official-api'] ? 'official' : 'builtin',
     log: (line) => console.log(`  ${line}`),
   });
   const shownHost = values.host === '127.0.0.1' || values.host === '::1' ? 'localhost' : values.host;
   const query = new URLSearchParams({ phones: String(phones), scale: String(scale) });
+  if (server.gamePath) query.set('path', server.gamePath);
   const url = `http://${shownHost.includes(':') ? `[${shownHost}]` : shownHost}:${server.port}${SIM_PATH}?${query}`;
-  console.log(`ac-playtest serving ${server.root}`);
+  console.log(`ac-playtest serving ${server.root}${server.gamePath ? ` (game in ${server.gamePath})` : ''}`);
   console.log(`  sim:  ${url}`);
   console.log(`  API:  ${values['official-api'] ? 'official (www.airconsole.com)' : 'offline stand-in'}`);
   console.log('  Ctrl+C to stop');

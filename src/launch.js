@@ -1,7 +1,7 @@
 // launch(): serve a build, open the sim page in Chromium (Playwright) and return a Sim to script the playtest.
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { startServer, SIM_PATH } from './server.js';
+import { startServer } from './server.js';
 import { launchBrowser } from './browser.js';
 import { Device } from './device.js';
 import { messageMatcher, eventMatcher, describeFilter } from './match.js';
@@ -17,7 +17,7 @@ const MAX_EVENTS = 200000;
 export async function launch(options = {}) {
   if (!options.build) throw new Error('launch({ build }) needs the build folder (with screen.html and controller.html)');
   const {
-    build, phones = 0, headless = true, port = 0, apiVersion, api = 'builtin',
+    build, path: gamePath, phones = 0, headless = true, port = 0, apiVersion, api = 'builtin',
     browser: sharedBrowser, channel, executablePath, browserArgs, mute = true,
     readyTimeout = 60000, timeout = 10000, viewport, log,
   } = options;
@@ -29,7 +29,7 @@ export async function launch(options = {}) {
   };
   for (const key of Object.keys(platform)) if (platform[key] === undefined) delete platform[key];
 
-  const server = await startServer({ build, port, apiVersion, api, log });
+  const server = await startServer({ build, path: gamePath, port, apiVersion, api, log });
   let browser;
   let context;
   try {
@@ -44,7 +44,7 @@ export async function launch(options = {}) {
     await page.addInitScript((config) => {
       if (window === window.top) window.__AC_PLAYTEST_CONFIG__ = config;
     }, platform);
-    await page.goto(server.origin + SIM_PATH);
+    await page.goto(server.simUrl);
     await sim.waitForEvent({ type: 'ready', device: 0 }, { timeout: readyTimeout }).catch(() => {
       throw new Error(`The screen did not create an AirConsole object within ${readyTimeout} ms. Check that ` +
         'screen.html loads the AirConsole API script (https://www.airconsole.com/api/airconsole-<version>.js) and ' +

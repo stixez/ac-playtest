@@ -1,0 +1,63 @@
+name: Bug report
+description: Something in ac-playtest behaves differently from AirConsole, or breaks a playtest
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! ac-playtest is unofficial, so please don't report AirConsole platform issues here.
+        If the problem is a difference from real AirConsole, say how you know the real behaviour (docs, the
+        official library, an observation on airconsole.com).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest playtest script and/or game files that show it (a gist or repo link is fine).
+      render: js
+    validations:
+      required: true
+  - type: input
+    id: engine
+    attributes:
+      label: Game engine
+      placeholder: e.g. Unity 6 + AirConsole Unity plugin 2.6, Phaser 3, plain HTML
+    validations:
+      required: true
+  - type: input
+    id: api-version
+    attributes:
+      label: AirConsole API version in the game's script tag
+      placeholder: e.g. airconsole-1.11.0.js
+    validations:
+      required: true
+  - type: dropdown
+    id: api-mode
+    attributes:
+      label: API mode
+      options:
+        - built-in stand-in (default)
+        - official (--official-api / api: 'official')
+        - both
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: ac-playtest version
+      placeholder: npx ac-playtest --version
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Node version, OS, browser (Playwright Chromium or Google Chrome + version)
+  - type: textarea
+    id: logs
+    attributes:
+      label: Errors, sim.consoleErrors(), screenshots

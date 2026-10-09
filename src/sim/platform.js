@@ -44,7 +44,10 @@
     translations: injected.translations,        // {en: {id: text}, de: {...}}
     gameConfiguration: injected.gameConfiguration,
     gameSafeArea: injected.gameSafeArea,
-    persistentData: injected.persistentData || {} // {uid: {key: value}}
+    persistentData: injected.persistentData || {}, // {uid: {key: value}}
+    // The game's folder below the served root ('' or 'a/b/'); the server checked it stays inside the root.
+    gamePath: option('path', '').split('/').filter(function (p) { return p && p !== '.' && p !== '..'; })
+      .map(encodeURIComponent).map(function (p) { return p + '/'; }).join('')
   };
 
   // ---- session state
@@ -322,7 +325,7 @@
     frame.id = 'ac-phone-' + id;
     frame.className = 'ac-device-frame';
     frame.setAttribute('allow', FRAME_POLICY);
-    frame.src = '/controller.html';
+    frame.src = '/' + config.gamePath + 'controller.html';
     frames[id] = frame;
     emit('join', { device: id, nickname: profiles[id].nickname });
     render();
@@ -484,7 +487,7 @@
     screen.id = 'ac-screen';
     screen.className = 'ac-device-frame';
     screen.setAttribute('allow', FRAME_POLICY);
-    screen.src = '/screen.html';
+    screen.src = '/' + config.gamePath + 'screen.html';
     frames[SCREEN] = screen;
     $('ac-screen-box').appendChild(screen);
     render();
