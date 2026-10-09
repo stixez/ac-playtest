@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ac-playtest</title>
+<style>
+  :root { --bg: #16181d; --panel: #20232b; --text: #d8dbe2; --muted: #8a90a0; --accent: #4f8cff; --warn: #e8a33d; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, sans-serif; }
+  header { display: flex; gap: 8px; align-items: center; padding: 6px 10px; background: var(--panel); flex-wrap: wrap; }
+  header strong { margin-right: 6px; }
+  header button { background: #2d3240; color: var(--text); border: 1px solid #3a4152; border-radius: 4px; padding: 3px 9px; cursor: pointer; }
+  header button:hover { border-color: var(--accent); }
+  #ac-status { color: var(--muted); margin-left: auto; }
+  main { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px; align-items: flex-start; }
+  .ac-frame-wrap { position: relative; overflow: hidden; background: #000; }
+  .ac-frame-box { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  .ac-device-frame { border: 0; display: block; background: #000; }
+  #ac-phones { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; }
+  .ac-tile { background: var(--panel); padding: 4px; border-radius: 6px; }
+  .ac-label { display: flex; gap: 6px; align-items: center; padding: 0 2px 4px; font-size: 12px; white-space: nowrap; }
+  .ac-badges { color: var(--warn); }
+  .ac-label button { margin-left: auto; font-size: 11px; background: none; color: var(--muted); border: 1px solid #3a4152; border-radius: 3px; cursor: pointer; }
+  .ac-label .ac-drop + .ac-reconnect { margin-left: 0; }
+  .ac-tile .ac-reconnect, .ac-tile.ac-is-gone .ac-drop { display: none; }
+  .ac-tile.ac-is-gone .ac-reconnect { display: inline-block; }
+  .ac-overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; text-align: center;
+    padding: 8px; font-weight: 600; background: rgba(0, 0, 0, .65); color: #fff; pointer-events: none; }
+  .ac-tile.ac-is-gone .ac-gone, .ac-tile.ac-is-silenced .ac-silenced { display: flex; }
+  #ac-screen-wrap.ac-paused .ac-paused-overlay, #ac-screen-wrap.ac-ad .ac-ad-overlay { display: flex; font-size: 22px; }
+  details { margin: 0 10px 10px; background: var(--panel); border-radius: 6px; padding: 4px 8px; }
+  #ac-log-list { font: 11px/1.35 ui-monospace, monospace; max-height: 260px; overflow: auto; color: var(--muted); white-space: pre; }
+</style>
+</head>
+<body>
+<header>
+  <strong>ac-playtest</strong>
+  <button id="ac-add">+ phone</button>
+  <button id="ac-add-premium">+ premium phone</button>
+  <button id="ac-pause">Pause</button>
+  <label><input type="checkbox" id="ac-adfill"> ads have fill</label>
+  <span id="ac-status"></span>
+</header>
+<main>
+  <div class="ac-tile">
+    <div class="ac-label">#0 screen</div>
+    <div id="ac-screen-wrap" class="ac-frame-wrap">
+      <div id="ac-screen-box" class="ac-frame-box"></div>
+      <div class="ac-overlay ac-paused-overlay">Paused (onPause)</div>
+      <div class="ac-overlay ac-ad-overlay">Ad playing (onAdShow)</div>
+    </div>
+  </div>
+  <div id="ac-phones"></div>
+</main>
+<details>
+  <summary>Event log</summary>
+  <div id="ac-log-list"></div>
+</details>
+<script src="/__ac/platform.js"></script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+{
+  "name": "ac-playtest",
+  "version": "0.1.0",
+  "description": "Unofficial offline, scriptable playtest harness for AirConsole games: a local AirConsole platform simulator plus a Playwright scripting API for CI.",
+  "type": "module",
+  "private": false,
+  "license": "MIT",
+  "author": "Zvonimir",
+  "keywords": [
+    "airconsole",
+    "playtest",
+    "simulator",
+    "playwright",
+    "e2e",
+    "testing",
+    "unity",
+    "webgl",
+    "html5-games"
+  ],
+  "bin": {
+    "ac-playtest": "bin/ac-playtest.js"
+  },
+  "main": "./src/index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "index.d.ts",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test --test-timeout=120000 test/*.test.js",
+    "test:official": "node --test --test-timeout=120000 test/official-api.test.js",
+    "example": "node examples/playtest.mjs",
+    "serve:example": "node bin/ac-playtest.js serve examples/dummy-game --open"
+  },
+  "dependencies": {
+    "playwright-core": "^1.63.0"
+  }
+}

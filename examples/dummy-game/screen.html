@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dummy game: screen</title>
+<!-- The usual AirConsole API tag. ac-playtest serves its offline stand-in in its place. -->
+<script src="https://www.airconsole.com/api/airconsole-1.11.0.js"></script>
+<style>
+  body { margin: 0; padding: 24px 32px; background: #12355b; color: #fff; font: 22px/1.4 system-ui, sans-serif; }
+  h1 { margin: 0 0 8px; font-size: 40px; }
+  #code { opacity: .7; }
+  ul { list-style: none; padding: 0; }
+  li { padding: 4px 0; }
+  li.master::after { content: "  (master)"; color: #ffd166; }
+  #last { margin-top: 16px; font: 16px ui-monospace, monospace; opacity: .85; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>Dummy game</h1>
+<div id="code">connecting…</div>
+<ul id="players"></ul>
+<div id="last"></div>
+<script>
+  // A deliberately tiny AirConsole game used by ac-playtest's tests and example:
+  // - lists the connected players (and the master controller),
+  // - answers {type: 'tap'} with {type: 'echo', n, from} to the sender,
+  // - counts drag strokes ({type: 'drag', phase: 'end'}) and broadcasts {type: 'score', ...},
+  // - records every AirConsole callback in window.events for assertions.
+  var airconsole = new AirConsole({ synchronize_time: true, translation: true });
+  var events = [];
+  var strokes = {};
+
+  function record(name, args) {
+    events.push([name].concat(Array.prototype.slice.call(args)));
+    render();
+  }
+
+  function render() {
+    if (airconsole.device_id === undefined) return;
+    var master = airconsole.getMasterControllerDeviceId();
+    var list = document.getElementById('players');
+    list.innerHTML = '';
+    airconsole.getControllerDeviceIds().forEach(function (id) {
+      var li = document.createElement('li');
+      li.textContent = '#' + id + ' ' + airconsole.getNickname(id) + (strokes[id] ? ' — strokes: ' + strokes[id] : '');
+      if (id === master) li.className = 'master';
+      list.appendChild(li);
+    });
+  }
+
+  [
+    'onReady', 'onConnect', 'onDisconnect', 'onDeviceStateChange', 'onCustomDeviceStateChange',
+    'onDeviceProfileChange', 'onActivePlayersChange', 'onAdShow', 'onAdComplete', 'onPause', 'onResume', 'onPremium',
+    'onHighScores', 'onHighScoreStored', 'onPersistentDataLoaded', 'onPersistentDataStored', 'onSetSafeArea'
+  ].forEach(function (name) {
+    airconsole[name] = function () { record(name, arguments); };
+  });
+
+  airconsole.onReady = function (code) {
+    record('onReady', arguments);
+    document.getElementById('code').textContent = 'Join code ' + code;
+  };
+
+  airconsole.onMessage = function (from, data) {
+    record('onMessage', arguments);
+    document.getElementById('last').textContent = 'last message from #' + from + ': ' + JSON.stringify(data);
+    if (data && data.type === 'tap') {
+      airconsole.message(from, { type: 'echo', n: data.n, from: from });
+    } else if (data && data.type === 'drag' && data.phase === 'end') {
+      strokes[from] = (strokes[from] || 0) + 1;
+      airconsole.broadcast({ type: 'score', device: from, strokes: strokes[from] });
+      render();
+    }
+  };
+</script>
+</body>
+</html>
