@@ -22,7 +22,7 @@ All notable changes to this project are documented here. The format follows
 - Simulated AirConsole platform (`/__ac/sim.html`): screen frame, phone frames, device list, message routing with
   a JSON round-trip, connect/disconnect/reconnect, ads, pause/resume, premium, profile changes, high scores and
   persistent data (in memory), device motion, safe area, and an event log.
-- Clean-room stand-in for the AirConsole JS API 1.11, served in place of `airconsole-<version>.js`, including
+- Independently written stand-in for the AirConsole JS API 1.11 (contains no AirConsole code), served in place of `airconsole-<version>.js`, including
   client-side player silencing.
 - `ac-playtest serve <buildDir>` CLI with `--port`, `--host`, `--phones`, `--scale`, `--api-version`,
   `--official-api` and `--open`.

@@ -1,5 +1,6 @@
 /*
- * ac-playtest — clean-room stand-in for the AirConsole JS API (airconsole-<version>.js).
+ * ac-playtest — independently written stand-in for the AirConsole JS API (airconsole-<version>.js); it contains
+ * no AirConsole code. Behaviour follows the public API reference and the observed behaviour of the 1.11 library.
  *
  * The ac-playtest server serves this file in place of https://www.airconsole.com/api/airconsole-<version>.js.
  * Like the real library it is a thin client: it keeps its own copy of the device list and talks to its parent

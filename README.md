@@ -6,7 +6,7 @@ in it by hand, or script whole sessions with [Playwright](https://playwright.dev
 joining and leaving, taps and drags on the real controller UI, pause/resume and ads.
 
 > **Unofficial.** ac-playtest is not affiliated with or endorsed by AirConsole / N-Dream AG. AirConsole is a
-> trademark of its owner. It ships its own clean-room stand-in for the AirConsole JS API and does not bundle
+> trademark of its owner. It ships its own independently written stand-in for the AirConsole JS API and does not bundle
 > any AirConsole code.
 
 ## Why
@@ -290,6 +290,9 @@ library (`npm run test:official`).
 
 ## Limitations
 
+- **Tested engines.** So far it has been used on a real Unity WebGL game (Unity 6, AirConsole Unity plugin 2.6)
+  and on the plain-HTML example game. Other engines (Phaser, Construct, plain HTML5 games) should work, since
+  they use the same JS API, but haven't been tried on a real project yet. Reports welcome.
 - Chromium only (Playwright's Chromium or Google Chrome); trusted touch input uses the Chrome DevTools
   Protocol.
 - One session per sim. Run several sims for several sessions.
