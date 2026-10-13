@@ -45,6 +45,12 @@
     gameConfiguration: injected.gameConfiguration,
     gameSafeArea: injected.gameSafeArea,
     persistentData: injected.persistentData || {}, // {uid: {key: value}}
+    // Phones may appear in `devices` (onConnect on the others) before their controller page has loaded:
+    // 'never' (default), 'always' or 'random' (seeded by `seed`). Per phone: addPhone({joinBeforeLoad: bool}).
+    joinBeforeLoad: option('joinBeforeLoad', 'never'),
+    seed: option('seed', 1),
+    loadDelay: option('loadDelay', 1000),        // ms from such an early announcement until the page loads
+    earlyMessages: option('earlyMessages', 'drop'), // messages to an announced, not yet loaded phone: drop | queue
     // The game's folder below the served root ('' or 'a/b/'); the server checked it stays inside the root.
     gamePath: option('path', '').split('/').filter(function (p) { return p && p !== '.' && p !== '..'; })
       .map(encodeURIComponent).map(function (p) { return p + '/'; }).join('')
@@ -66,6 +72,19 @@
   var highscores = [];
   var persistent = JSON.parse(JSON.stringify(config.persistentData));
   var seq = 0;
+  var early = {};            // phone id -> queued messages ([] when dropping) while announced but not loaded
+  var loadTimers = {};       // phone id -> timer that starts loading an early-announced phone's page
+  var random = seededRandom(Number(config.seed) || 1);
+
+  // mulberry32: a small seeded PRNG, so joinBeforeLoad: 'random' runs are reproducible.
+  function seededRandom(a) {
+    return function () {
+      a = (a + 0x6D2B79F5) | 0;
+      var t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
 
   var $ = function (id) { return document.getElementById(id); };
   var clone = function (value) { return value === undefined ? undefined : JSON.parse(JSON.stringify(value)); };
@@ -133,6 +152,7 @@
 
   function onApiReady(id, data) {
     if (info[id] && devices[id]) disconnect(id, true); // the frame reloaded: leave, then join again
+    var wasAnnounced = !!early[id];
     info[id] = {
       version: data.version, silencePlayers: !!data.silencePlayers, translation: !!data.translation,
       synchronize_time: !!data.synchronize_time, device_motion: data.device_motion
@@ -164,8 +184,12 @@
     if (id === SCREEN) {
       screenReady = true;
       pendingPhones.splice(0).forEach(createPhoneFrame);
+    } else if (wasAnnounced) {
+      var queued = early[id];
+      delete early[id];
+      queued.forEach(function (payload) { send(id, payload); });
     } else {
-      emit('connect', { device: id, nickname: device.nickname, premium: device.premium });
+      emit('connect', { device: id, nickname: device.nickname, premium: device.premium, early: false });
     }
     render();
   }
@@ -176,8 +200,21 @@
     var targets = to === undefined || to === null
       ? readyIds().filter(function (id) { return id !== from; })
       : (devices[to] && info[to] ? [to] : []);
+    var announced = Object.keys(early).map(Number).filter(function (id) {
+      return id !== from && (to === undefined || to === null || to === id);
+    });
     targets.forEach(function (target) {
       send(target, { action: 'message', from: from, to: to, data: payload });
+    });
+    // Announced phones whose page has not loaded yet: their AirConsole API cannot receive anything.
+    announced.forEach(function (target) {
+      var message = { action: 'message', from: from, to: to, data: payload };
+      if (config.earlyMessages === 'queue') {
+        early[target].push(message);
+        emit('messageQueued', { from: from, to: target, data: payload });
+      } else {
+        emit('messageDropped', { from: from, to: target, data: payload, reason: 'controller page not loaded yet' });
+      }
     });
   }
 
@@ -312,7 +349,8 @@
       nickname: profile.nickname || ('Guest ' + id),
       uid: profile.uid || ('uid-' + id + '-' + Math.random().toString(36).slice(2, 8)),
       premium: !!profile.premium,
-      language: profile.language || config.language
+      language: profile.language || config.language,
+      joinBeforeLoad: profile.joinBeforeLoad // undefined: decided per join by config.joinBeforeLoad
     };
     if (screenReady) createPhoneFrame(id);
     else pendingPhones.push(id);
@@ -320,20 +358,49 @@
     return id;
   }
 
+  function joinsEarly(id) {
+    var choice = profiles[id].joinBeforeLoad;
+    if (choice !== undefined) return !!choice;
+    if (config.joinBeforeLoad === 'always') return true;
+    if (config.joinBeforeLoad === 'random') return random() < 0.5;
+    return false;
+  }
+
   function createPhoneFrame(id) {
     var frame = document.createElement('iframe');
     frame.id = 'ac-phone-' + id;
     frame.className = 'ac-device-frame';
     frame.setAttribute('allow', FRAME_POLICY);
-    frame.src = '/' + config.gamePath + 'controller.html';
     frames[id] = frame;
+    var url = '/' + config.gamePath + 'controller.html';
     emit('join', { device: id, nickname: profiles[id].nickname });
     render();
     phoneTile(id).querySelector('.ac-frame-box').appendChild(frame);
+    if (!joinsEarly(id)) {
+      frame.src = url;
+      return;
+    }
+    // Announce the phone as running the game (others get onDeviceStateChange + onConnect), then load its page.
+    var p = profiles[id];
+    devices[id] = {
+      uid: p.uid, nickname: p.nickname, location: new URL(url, location.href).href, custom: undefined,
+      language: p.language, auth: false, slow_connection: false, premium: p.premium
+    };
+    early[id] = [];
+    sendUpdate(id, null, id);
+    emit('connect', { device: id, nickname: p.nickname, premium: p.premium, early: true });
+    loadTimers[id] = setTimeout(function () {
+      delete loadTimers[id];
+      if (frames[id] === frame) frame.src = url;
+    }, config.loadDelay);
+    render();
   }
 
   // A device leaves: its frame goes away and every other device gets an update without device data.
   function disconnect(id, keepFrame) {
+    clearTimeout(loadTimers[id]);
+    delete loadTimers[id];
+    delete early[id];
     if (!keepFrame && frames[id]) {
       frames[id].remove();
       delete frames[id];
@@ -363,8 +430,9 @@
   }
 
   // Device ids stay reserved: a reconnecting phone gets its old id (and nickname / uid) back.
-  function reconnect(id) {
+  function reconnect(id, options) {
     if (!profiles[id] || frames[id] || pendingPhones.indexOf(id) >= 0) return false;
+    if (options && options.joinBeforeLoad !== undefined) profiles[id].joinBeforeLoad = options.joinBeforeLoad;
     if (screenReady) createPhoneFrame(id);
     else pendingPhones.push(id);
     return true;
@@ -398,7 +466,8 @@
   }
 
   function masterId() {
-    var ids = readyIds().filter(function (id) { return id !== SCREEN; });
+    var ids = [];
+    for (var i = 1; i < devices.length; i++) if (devices[i]) ids.push(i);
     var premium = ids.filter(function (id) { return devices[id].premium; });
     return premium.length ? premium[0] : ids[0];
   }

@@ -249,6 +249,24 @@ export function apiSuite(api) {
     await until(() => p1.evaluate(() => airconsole.getNickname()), { expected: 'Zoe' });
   });
 
+  test('joinBeforeLoad: others get onConnect before the phone page loads; no second onConnect later', async (t) => {
+    const sim = await start(t, { loadDelay: 600 });
+    const adding = sim.addPhone({ nickname: 'Early', joinBeforeLoad: true });
+    const announced = await sim.waitForEvent({ type: 'connect', device: 1 });
+    assert.equal(announced.early, true);
+    await expectCallbacks(sim.screen, ['onReady 1234 5678', 'onDeviceStateChange 1 {...}', 'onConnect 1'], screenOnly);
+    assert.deepEqual(await sim.screen.evaluate(() => airconsole.getControllerDeviceIds()), [1]);
+    assert.equal(await sim.screen.evaluate(() => airconsole.getNickname(1)), 'Early');
+    assert.equal(sim.events({ type: 'ready', device: 1 }).length, 0, 'the phone page has not loaded yet');
+
+    const phone = await adding;
+    await expectCallbacks(phone, ['onReady 1234 5678', 'onConnect 0'], screenOnly);
+    // When the page loads, the screen sees a state change for the phone, but it is not "connected" a second time.
+    await until(async () => (await callbacks(sim.screen, screenOnly)).length === 4);
+    assert.deepEqual(await callbacks(sim.screen, screenOnly),
+      ['onReady 1234 5678', 'onDeviceStateChange 1 {...}', 'onConnect 1', 'onDeviceStateChange 1 {...}']);
+  });
+
   test('device motion data reaches the phone', async (t) => {
     const sim = await start(t, { phones: 1 });
     const [phone] = sim.phones();

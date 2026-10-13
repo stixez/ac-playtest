@@ -26,7 +26,15 @@ export async function launch(options = {}) {
     adDuration: options.adDuration, adFill: options.adFill, latency: options.latency, language: options.language,
     serverTimeOffset: options.serverTimeOffset, translations: options.translations,
     gameConfiguration: options.gameConfiguration, gameSafeArea: options.gameSafeArea, persistentData: options.persistentData,
+    joinBeforeLoad: options.joinBeforeLoad, seed: options.seed, loadDelay: options.loadDelay,
+    earlyMessages: options.earlyMessages,
   };
+  if (platform.joinBeforeLoad !== undefined && !['never', 'always', 'random'].includes(platform.joinBeforeLoad)) {
+    throw new Error(`joinBeforeLoad must be 'never', 'always' or 'random', not ${JSON.stringify(platform.joinBeforeLoad)}`);
+  }
+  if (platform.earlyMessages !== undefined && !['drop', 'queue'].includes(platform.earlyMessages)) {
+    throw new Error(`earlyMessages must be 'drop' or 'queue', not ${JSON.stringify(platform.earlyMessages)}`);
+  }
   for (const key of Object.keys(platform)) if (platform[key] === undefined) delete platform[key];
 
   const server = await startServer({ build, path: gamePath, port, apiVersion, api, log });
@@ -115,8 +123,10 @@ export class Sim {
 
   /**
    * Connects a new phone (loads controller.html in a new frame) and resolves once its AirConsole API is ready
-   * and the other devices were told (onConnect).
-   * @param {{nickname?: string, uid?: string, premium?: boolean, language?: string, timeout?: number}} [profile]
+   * and the other devices were told (onConnect). With `joinBeforeLoad: true` the others are told first and the
+   * page loads `loadDelay` ms later (see README, "Testing robustness"); this still resolves when the page is ready.
+   * @param {{nickname?: string, uid?: string, premium?: boolean, language?: string, joinBeforeLoad?: boolean,
+   *   timeout?: number}} [profile]
    */
   async addPhone(profile = {}) {
     const { timeout = 30000, ...rest } = profile;
@@ -135,17 +145,21 @@ export class Sim {
   }
 
   /** Reconnects a dropped phone with its old device id, nickname and uid (a fresh controller.html). */
-  async reconnect(id, { timeout = 30000 } = {}) {
+  async reconnect(id, { timeout = 30000, joinBeforeLoad } = {}) {
     id = idOf(id);
     const since = this.mark();
-    const ok = await this.page.evaluate((i) => window.__acPlatform.reconnect(i), id);
+    const ok = await this.page.evaluate(([i, o]) => window.__acPlatform.reconnect(i, o), [id, { joinBeforeLoad }]);
     if (!ok) throw new Error(`reconnect(${id}): unknown phone, or it is still connected`);
     return this._whenConnected(id, since, timeout);
   }
 
   async _whenConnected(id, since, timeout) {
     try {
-      await this.waitForEvent({ type: 'connect', device: id }, { since, timeout });
+      // Both orders happen: normally the page's API is ready first; with joinBeforeLoad the announcement is.
+      await Promise.all([
+        this.waitForEvent({ type: 'connect', device: id }, { since, timeout }),
+        this.waitForEvent({ type: 'ready', device: id }, { since, timeout }),
+      ]);
     } catch {
       throw new Error(`Phone ${id} did not connect within ${timeout} ms. Does controller.html load the AirConsole ` +
         `API and call new AirConsole()? Console errors: ${JSON.stringify(this.consoleErrors().map((e) => e.text))}`);
@@ -167,9 +181,9 @@ export class Sim {
     return phone;
   }
 
-  /** Phones that are currently connected, by id. */
+  /** Connected phones, by id (a phone announced with joinBeforeLoad is listed once addPhone resolved). */
   phones() {
-    return [...this._connected].filter((id) => id !== 0).sort((a, b) => a - b).map((id) => this.device(id));
+    return [...this._connected].filter((id) => this._phones.has(id)).sort((a, b) => a - b).map((id) => this.device(id));
   }
 
   // ---- platform controls

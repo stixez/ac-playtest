@@ -21,6 +21,9 @@ AirConsole games are two web pages: a `screen.html` on the TV and a `controller.
 through AirConsole's JS API. The official simulator needs an AirConsole account and an internet connection, and
 you can't script it. Unit tests don't run the real build.
 
+AirConsole has said it is working on an updated official simulator with better developer tooling. ac-playtest
+covers a narrower need, either until that arrives or alongside it: offline runs, scripted sessions and CI.
+
 ac-playtest grew out of play-testing a Unity WebGL game. Its first scripted run caught a release-blocking crash
 that only happened in the WebGL build, when the lobby music started. The unit tests had all passed. With
 ac-playtest that bug would have failed CI instead of reaching the upload.
@@ -28,7 +31,7 @@ ac-playtest that bug would have failed CI instead of reaching the upload.
 - **Works offline, no account.** Serves your build and a local platform from one origin.
 - **Faithful where it matters.** The stand-in API derives connect/disconnect, the master controller, custom
   states, active players and player silencing the same way the 1.11 library does. The opt-in test suite runs
-  the **official** library against the simulator and passes the same 16 behaviour tests
+  the **official** library against the simulator and passes the same 17 behaviour tests
   ([Fidelity](#fidelity)).
 - **Real input.** Phone taps and drags are trusted touch events (pointer + touch + click), so they work on
   buttons and on canvases.
@@ -94,7 +97,7 @@ ac-playtest serve <buildDir> [options]
 
 The sim page has buttons to add (premium) phones, pause/resume and toggle ad fill. Each phone has drop and
 reconnect buttons, and there is a live event log. `http://localhost:8080/` redirects to the sim page, at
-`/__ac/sim.html`. Query parameters such as `?phones=4&scale=0.4&latency=50` configure it.
+`/__ac/sim.html`. Query parameters such as `?phones=4&scale=0.4&latency=50&joinBeforeLoad=random` configure it.
 
 ## Scripting API
 
@@ -123,15 +126,19 @@ reconnect buttons, and there is a live event log. `http://localhost:8080/` redir
 | `gameConfiguration`, `gameSafeArea` | not sent | sent to the screen when set |
 | `serverTimeOffset` | `0` | |
 | `persistentData` | `{}` | initial `{ uid: { key: value } }` |
+| `joinBeforeLoad` | `'never'` | `'always'` / `'random'`: phones appear to the others before their page loads (see [Testing robustness](#testing-robustness)) |
+| `seed` | `1` | seed for `joinBeforeLoad: 'random'` |
+| `loadDelay` | `1000` | ms between such an early appearance and the controller page loading |
+| `earlyMessages` | `'drop'` | messages to a phone that appeared but hasn't loaded: `'drop'` or `'queue'` (delivered once it is ready) |
 
 ### `Sim`
 
 | | |
 | --- | --- |
 | `sim.screen` | the screen `Device` (id 0) |
-| `addPhone({ nickname, uid, premium, language })` | connects a phone (a fresh `controller.html`); resolves when its API is ready and the others got `onConnect` |
+| `addPhone({ nickname, uid, premium, language, joinBeforeLoad })` | connects a phone (a fresh `controller.html`); resolves when its API is ready and the others got `onConnect` |
 | `dropPhone(idOrPhone)` | removes the phone; the others get `onDeviceStateChange(id, undefined)` + `onDisconnect` |
-| `reconnect(id)` | same id, nickname and uid; a new page load |
+| `reconnect(id, { joinBeforeLoad })` | same id, nickname and uid; a new page load |
 | `phones()`, `device(id)` | connected phones / any device |
 | `pause()`, `resume()` | screen gets `onPause` / `onResume` |
 | `setPremium(id)`, `setNickname(id, name)`, `setAdFill(bool)`, `deviceMotion(id, data)`, `setSafeArea(area)` | platform events |
@@ -149,15 +156,34 @@ reconnect buttons, and there is a live event log. `http://localhost:8080/` redir
 **Message filters** are `{ from, to, type }` or a function. `type` matches `data.type`, a common convention.
 `to: n` also matches broadcasts that reached device `n`.
 **Event filters** match fields exactly, e.g. `{ type: 'connect', device: 2 }`.
-Event types: `ready`, `join`, `connect`, `disconnect`, `message`, `custom`, `players`, `ad` (`phase`:
-`request`/`show`/`complete`), `pause`, `resume`, `premium`, `profile`, `navigate`, `vibrate`, `orientation`,
-`immersive`, `highScoreStored`, `highScores`, `persistentStore`, `persistentRequest`, `jserror`, `set`.
+Event types: `ready`, `join`, `connect` (`early: true` for a phone that appeared before its page loaded),
+`disconnect`, `message`, `messageDropped` / `messageQueued` (to a phone whose page hasn't loaded), `custom`,
+`players`, `ad` (`phase`: `request`/`show`/`complete`), `pause`, `resume`, `premium`, `profile`, `navigate`,
+`vibrate`, `orientation`, `immersive`, `highScoreStored`, `highScores`, `persistentStore`, `persistentRequest`,
+`jserror`, `set`.
 
 Taps and drags work on any phone, wherever it sits on the sim page: the page is scrolled to bring the target
 into the viewport first (games' `position: fixed` layouts can't do that themselves).
 
 Events reach Node asynchronously. Use `waitFor*` instead of sleeping. To avoid matching something old, take
 `const since = sim.mark()` *before* the action that triggers it.
+
+### Testing robustness
+
+AirConsole says phones *can* appear in `devices` before their controller page has loaded, and that games
+shouldn't depend on either order. With `joinBeforeLoad`, the screen and the other phones get
+`onDeviceStateChange` + `onConnect` for a phone `loadDelay` ms before its `controller.html` loads. Its own
+`onReady` comes later. A game that greets a phone in `onConnect` and waits for that greeting gets caught:
+
+```js
+const sim = await launch({ build, phones: 2, joinBeforeLoad: 'always' });
+// the screen's welcome in onConnect went to pages that weren't loaded yet:
+assert.deepEqual(sim.events({ type: 'messageDropped' }), []);   // fails for such a game
+```
+
+The robust pattern: the controller says hello from its `onReady`, and the screen answers that. Use
+`joinBeforeLoad: 'random'` with a `seed` to mix both orders reproducibly, or `addPhone({ joinBeforeLoad: true })`
+for one phone. The sim page takes the same settings as query parameters (`?joinBeforeLoad=random&seed=3`).
 
 ### `Device` (the screen and each phone)
 
@@ -221,7 +247,7 @@ runners also have Google Chrome preinstalled, which ac-playtest uses as a fallba
 
 | Game | API mode | Result |
 | --- | --- | --- |
-| A Unity WebGL game: Unity 6, AirConsole Unity plugin 2.6, landscape controllers, Brotli build | built-in and official | Full scripted matches pass in both modes: lobby, START, 10 slingshot shots by touch drag, mid-flight taps, drop/reconnect, pause/resume, no console errors. Dogfooding it found two harness bugs (input on phones outside the viewport; Unity taking the frame fullscreen), both fixed with tests. Its first run caught a real WebGL-only crash in the game |
+| A Unity WebGL game: Unity 6, AirConsole Unity plugin 2.6, landscape controllers, Brotli build | built-in and official | Full scripted matches pass in both modes: lobby, START, 10 slingshot shots by touch drag, mid-flight taps, drop/reconnect, pause/resume, no console errors. They also pass with `joinBeforeLoad: 'always'`: the screen's first views to not-yet-loaded phones are dropped, and the game recovers because its controller says hello from `onReady`. Dogfooding it found two harness bugs (input on phones outside the viewport; Unity taking the frame fullscreen), both fixed with tests. Its first run caught a real WebGL-only crash in the game |
 | [airconsole-scaffold](https://github.com/AirConsole/airconsole-scaffold) | built-in and official | Passes: connect log, message and reply, the cube, disconnect |
 | [airconsole-api-examples](https://github.com/AirConsole/airconsole-api-examples) (overview, device states, premium, profile, persistent data; served with `path`) | built-in and official | Device states, premium and profile behave as intended. The two modes produced identical event logs, screen/phone text and console errors, except for the profile-picture URL (local SVG vs airconsole.com) |
 
@@ -271,9 +297,9 @@ library (`npm run test:official`).
 | ✓ `message` / `broadcast` / `onMessage` | asynchronous; JSON round-trip (`undefined` dropped, `NaN` → `null`, `Date` → string); a broadcast skips its sender; messages to unknown devices are dropped |
 | ✓ `getMasterControllerDeviceId` | premium devices first, then the lowest connected id |
 | ✓ `getControllerDeviceIds`, `getNickname` (`"Guest N"` fallback), `getUID`, `isPremium`, `getPremiumDeviceIds` | |
-| ✓ custom device state | `setCustomDeviceState`, `setCustomDeviceStateProperty` (merge), `getCustomDeviceState`, `onCustomDeviceStateChange` |
+| ✓ custom device state | `setCustomDeviceState`, `setCustomDeviceStateProperty` (merge), `getCustomDeviceState`, `onCustomDeviceStateChange`. Updates go to the *other* devices, not back to the one that set them (confirmed by the AirConsole team in email, Oct 2026) |
 | ✓ active players | `setActivePlayers` (screen only), `getActivePlayerDeviceIds`, `convert*`, `onActivePlayersChange` |
-| ✓ player silencing | client-side logic as in the 1.11 library: on by default unless the game loads `airconsole-latest.js`. While players are set, devices that aren't players are silenced: their messages are dropped, and their connect/state updates are held until `setActivePlayers(0)` replays them (a connect followed by a disconnect cancels out). The sim UI overlays silenced phones |
+| ✓ player silencing | client-side logic as in the 1.11 library: on by default unless the game loads `airconsole-latest.js`. While players are set, devices that aren't players are silenced: their messages are dropped, and their connect/state updates are held until `setActivePlayers(0)` replays them (a connect followed by a disconnect cancels out). The server does no silencing beyond this client logic (confirmed by the AirConsole team in email, Oct 2026). The sim UI overlays silenced phones |
 | ✓ ads | `showAd` (screen only) → `onAdShow` on every device → `onAdComplete(true)` after `adDuration`; with no fill only `onAdComplete(false)` |
 | ✓ `onPause` / `onResume` | screen only, when you call `sim.pause()` / `sim.resume()` |
 | ✓ `synchronize_time` / `getServerTime` | throws without `synchronize_time`; offset configurable |
@@ -282,6 +308,7 @@ library (`npm run test:official`).
 | ✓ high scores, persistent data | in memory, answered through `onHighScoreStored` / `onHighScores` / `onPersistentDataStored` / `onPersistentDataLoaded` |
 | ✓ `getPremium` / `onPremium`, profile changes / `onDeviceProfileChange` | via `sim.setPremium` / `sim.setNickname` too |
 | ✓ `onDeviceMotion` | data comes from `sim.deviceMotion()` |
+| ✓ phones in `devices` before their page loads | optional (`joinBeforeLoad`); AirConsole says this can happen but isn't guaranteed (email, Oct 2026). Off by default |
 | `orientation` / `setOrientation` | recorded; the phone frame rotates |
 | `setup_document` | viewport meta, no text selection, `touchmove` default prevented |
 | uncaught errors | reported to the platform as `jserror`, like the real library |
@@ -292,8 +319,9 @@ library (`npm run test:official`).
 | --- | --- |
 | join timing | phones load `controller.html` only after the screen's API is ready. On AirConsole phones may load in parallel, so a screen's `onReady` can already see controllers |
 | device data | `uid`, `nickname`, `location`, `custom`, `language`, `premium`, `auth: false`, `slow_connection: false`; the screen also has `silencePlayers`, `players`. Real device data has more (client info, environment, picture…) |
-| update echo | state updates (custom state, active players) go to the *other* devices only. Whether AirConsole also echoes them to the device that made the change is unverified |
-| devices before loading | real phones may appear in `devices` (and fire `onDeviceStateChange`) before they load the game; here they appear when their API is ready |
+| active players echo | the active-players update goes to the *other* devices only; whether the screen also gets it back is unverified |
+| early appearance | with `joinBeforeLoad`, the phone is announced with the game's controller URL, so the others also get `onConnect` early (the case games must survive). Real phones may first appear with a non-game location (`onDeviceStateChange` only); that variant isn't modelled |
+| messages before load | **assumption:** messages to a phone that appeared but hasn't loaded are dropped (`earlyMessages: 'drop'`). A page that isn't loaded can't receive them, and the 1.11 client ignores messages that arrive before its `ready`. Whether AirConsole's servers queue them is unverified; `earlyMessages: 'queue'` models that instead |
 | premium | `getPremium()` upgrades at once (documented for development mode) and notifies every device |
 | profile pictures | a generated SVG from the local server instead of an airconsole.com URL |
 | high scores | one global list per level name + version; only a `world` rank; no friends, regions or share URLs |

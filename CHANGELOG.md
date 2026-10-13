@@ -3,6 +3,28 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-10-13
+
+### Added
+
+- `joinBeforeLoad` (`'never'` default, `'always'`, `'random'` with `seed`) and `addPhone({ joinBeforeLoad })` /
+  `reconnect(id, { joinBeforeLoad })`: a phone can appear to the other devices (`onDeviceStateChange` +
+  `onConnect`) `loadDelay` ms before its controller page loads, which AirConsole says can happen. This catches
+  games that treat "connected" as "controller ready".
+- `earlyMessages: 'drop' | 'queue'` for messages to a phone that appeared but hasn't loaded (default `'drop'`, an
+  assumption documented in the Fidelity table), with new `messageDropped` / `messageQueued` events. `connect`
+  events carry `early: true | false`.
+- README: a "Testing robustness" section. The early-join behaviour is part of the API suite, so the official
+  library runs it too (now 17 tests).
+
+### Changed
+
+- Fidelity table: two behaviours are now confirmed by the AirConsole team in email (Oct 2026). Custom device-state
+  updates are not echoed back to the device that set them, and the server does no player silencing beyond the
+  1.11 client logic.
+- README notes that AirConsole is working on an updated official simulator.
+- `addPhone` / `reconnect` now resolve once the phone's page is ready *and* the others were told, in either order.
+
 ## [0.1.0] - 2026-10-09
 
 ### Added
@@ -37,4 +59,5 @@ All notable changes to this project are documented here. The format follows
 - A Unity WebGL screen could take the sim page fullscreen and cover the phones, so every phone tap hit the
   screen. Device frames are no longer allowed to go fullscreen.
 
+[0.2.0]: https://github.com/stixez/ac-playtest/releases/tag/v0.2.0
 [0.1.0]: https://github.com/stixez/ac-playtest/releases/tag/v0.1.0

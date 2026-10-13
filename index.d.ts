@@ -62,6 +62,17 @@ export interface LaunchOptions {
   gameSafeArea?: { top: number; left: number; bottom: number; right: number };
   /** Initial persistent data: {uid: {key: value}}. */
   persistentData?: Record<string, Record<string, unknown>>;
+  /**
+   * Whether phones appear to the other devices (onDeviceStateChange + onConnect) before their controller page has
+   * loaded. Default 'never'. 'random' decides per join, reproducibly with `seed`.
+   */
+  joinBeforeLoad?: 'never' | 'always' | 'random';
+  /** Seed for joinBeforeLoad: 'random'. Default 1. */
+  seed?: number;
+  /** Ms between an early appearance and the controller page loading. Default 1000. */
+  loadDelay?: number;
+  /** Messages to a phone that appeared but hasn't loaded: dropped (default) or queued until it is ready. */
+  earlyMessages?: 'drop' | 'queue';
 }
 
 export interface PhoneProfile {
@@ -69,6 +80,8 @@ export interface PhoneProfile {
   uid?: string;
   premium?: boolean;
   language?: string;
+  /** Appear to the others before the controller page loads (overrides the launch-level joinBeforeLoad). */
+  joinBeforeLoad?: boolean;
   /** Ms to wait for the phone to connect. Default 30000. */
   timeout?: number;
 }
@@ -77,7 +90,7 @@ export interface PhoneProfile {
 export interface SimEvent {
   seq: number;
   time: number;
-  type: 'ready' | 'join' | 'connect' | 'disconnect' | 'message' | 'custom' | 'players' | 'ad' | 'pause' | 'resume'
+  type: 'ready' | 'join' | 'connect' | 'disconnect' | 'message' | 'messageDropped' | 'messageQueued' | 'custom' | 'players' | 'ad' | 'pause' | 'resume'
     | 'premium' | 'profile' | 'navigate' | 'vibrate' | 'orientation' | 'immersive' | 'highScoreStored' | 'highScores'
     | 'persistentStore' | 'persistentRequest' | 'jserror' | 'platformEvent' | 'set' | string;
   device?: number;
@@ -172,7 +185,7 @@ export class Sim {
 
   addPhone(profile?: PhoneProfile): Promise<Device>;
   dropPhone(phone: number | Device): Promise<void>;
-  reconnect(phone: number | Device, options?: { timeout?: number }): Promise<Device>;
+  reconnect(phone: number | Device, options?: { timeout?: number; joinBeforeLoad?: boolean }): Promise<Device>;
   device(id: number): Device;
   /** Connected phones, by id. */
   phones(): Device[];
