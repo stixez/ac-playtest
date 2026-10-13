@@ -117,6 +117,7 @@ reconnect buttons, and there is a live event log. `http://localhost:8080/` redir
 | `channel`, `executablePath`, `browserArgs`, `mute` | | browser selection; audio muted by default |
 | `readyTimeout` | `60000` | ms to wait for the screen's `new AirConsole()` |
 | `timeout` | `10000` | default for the `waitFor*` helpers |
+| `phoneTimeout` | `30000` | ms each phone (from `phones`, `addPhone`, `reconnect`) may take to connect, *plus* `loadDelay` |
 | `screenSize`, `phoneSize`, `scale` | 1280×720, 360×640, 1 | frame sizes (CSS px); phones rotate on `setOrientation` |
 | `viewport` | fits screen + 2 phones | the screen plus two phones beside it, in either orientation, without scrolling |
 | `code` | `'1234 5678'` | join code passed to `onReady` |
@@ -129,20 +130,20 @@ reconnect buttons, and there is a live event log. `http://localhost:8080/` redir
 | `joinBeforeLoad` | `'never'` | `'always'` / `'random'`: phones appear to the others before their page loads (see [Testing robustness](#testing-robustness)) |
 | `seed` | `1` | seed for `joinBeforeLoad: 'random'` |
 | `loadDelay` | `1000` | ms between such an early appearance and the controller page loading |
-| `earlyMessages` | `'drop'` | messages to a phone that appeared but hasn't loaded: `'drop'` or `'queue'` (delivered once it is ready) |
+| `earlyMessages` | `'drop'` | messages (and nickname changes, device motion) for a phone that appeared but hasn't loaded: `'drop'` or `'queue'` (delivered once it is ready) |
 
 ### `Sim`
 
 | | |
 | --- | --- |
 | `sim.screen` | the screen `Device` (id 0) |
-| `addPhone({ nickname, uid, premium, language, joinBeforeLoad })` | connects a phone (a fresh `controller.html`); resolves when its API is ready and the others got `onConnect` |
+| `addPhone({ nickname, uid, premium, language, joinBeforeLoad, timeout })` | connects a phone (a fresh `controller.html`); resolves when its API is ready and the others got `onConnect`; rejects at once if the phone is dropped first |
 | `dropPhone(idOrPhone)` | removes the phone; the others get `onDeviceStateChange(id, undefined)` + `onDisconnect` |
-| `reconnect(id, { joinBeforeLoad })` | same id, nickname and uid; a new page load |
+| `reconnect(id, { joinBeforeLoad, timeout })` | same id, nickname and uid; a new page load. `joinBeforeLoad` applies to this join only |
 | `phones()`, `device(id)` | connected phones / any device |
 | `pause()`, `resume()` | screen gets `onPause` / `onResume` |
 | `setPremium(id)`, `setNickname(id, name)`, `setAdFill(bool)`, `deviceMotion(id, data)`, `setSafeArea(area)` | platform events |
-| `messages(filter)`, `lastMessage(filter)` | messages as they left the sender: `{ seq, time, from, to, data }`, with `to: 'all'` for broadcasts |
+| `messages(filter)`, `lastMessage(filter)` | messages as they left the sender: `{ seq, time, from, to, data }`, with `to: 'all'` for broadcasts; `undelivered` lists phones whose page hadn't loaded |
 | `waitForMessage(filter, { timeout, since })` | first match since `since` (default: whole history) |
 | `events(filter)`, `waitForEvent(filter, opts)` | everything recorded (see below) |
 | `mark()` | current sequence number; pass it as `since` to only wait for new things |
@@ -154,10 +155,13 @@ reconnect buttons, and there is a live event log. `http://localhost:8080/` redir
 | `close()` | |
 
 **Message filters** are `{ from, to, type }` or a function. `type` matches `data.type`, a common convention.
-`to: n` also matches broadcasts that reached device `n`.
+`to: n` means *delivered to* device `n`: sent to it, or broadcast by another device. Messages dropped because `n`'s
+page hadn't loaded don't count; queued ones count once they arrive.
 **Event filters** match fields exactly, e.g. `{ type: 'connect', device: 2 }`.
 Event types: `ready`, `join`, `connect` (`early: true` for a phone that appeared before its page loaded),
-`disconnect`, `message`, `messageDropped` / `messageQueued` (to a phone whose page hasn't loaded), `custom`,
+`disconnect`, `removed` (a phone dropped before it was ever announced), `message`, `messageDropped` /
+`messageQueued` (for a phone whose page hasn't loaded; `action` is `message`, `profile` or `device_motion`),
+`messageDelivered` (a queued message arrived), `custom`,
 `players`, `ad` (`phase`: `request`/`show`/`complete`), `pause`, `resume`, `premium`, `profile`, `navigate`,
 `vibrate`, `orientation`, `immersive`, `highScoreStored`, `highScores`, `persistentStore`, `persistentRequest`,
 `jserror`, `set`.
@@ -180,6 +184,9 @@ const sim = await launch({ build, phones: 2, joinBeforeLoad: 'always' });
 // the screen's welcome in onConnect went to pages that weren't loaded yet:
 assert.deepEqual(sim.events({ type: 'messageDropped' }), []);   // fails for such a game
 ```
+
+A dropped message still shows in `sim.messages()` (it was sent, with `undelivered: [id]`), but never in that
+phone's `messages()` / `lastMessage()` / `waitForMessage()`.
 
 The robust pattern: the controller says hello from its `onReady`, and the screen answers that. Use
 `joinBeforeLoad: 'random'` with a `seed` to mix both orders reproducibly, or `addPhone({ joinBeforeLoad: true })`
@@ -321,7 +328,7 @@ library (`npm run test:official`).
 | device data | `uid`, `nickname`, `location`, `custom`, `language`, `premium`, `auth: false`, `slow_connection: false`; the screen also has `silencePlayers`, `players`. Real device data has more (client info, environment, picture…) |
 | active players echo | the active-players update goes to the *other* devices only; whether the screen also gets it back is unverified |
 | early appearance | with `joinBeforeLoad`, the phone is announced with the game's controller URL, so the others also get `onConnect` early (the case games must survive). Real phones may first appear with a non-game location (`onDeviceStateChange` only); that variant isn't modelled |
-| messages before load | **assumption:** messages to a phone that appeared but hasn't loaded are dropped (`earlyMessages: 'drop'`). A page that isn't loaded can't receive them, and the 1.11 client ignores messages that arrive before its `ready`. Whether AirConsole's servers queue them is unverified; `earlyMessages: 'queue'` models that instead |
+| messages before load | **assumption:** messages (and the platform's nickname / device-motion notifications) for a phone that appeared but hasn't loaded are dropped (`earlyMessages: 'drop'`). A page that isn't loaded can't receive them, and the 1.11 client ignores messages that arrive before its `ready`. Whether AirConsole's servers queue them is unverified; `earlyMessages: 'queue'` models that instead |
 | premium | `getPremium()` upgrades at once (documented for development mode) and notifies every device |
 | profile pictures | a generated SVG from the local server instead of an airconsole.com URL |
 | high scores | one global list per level name + version; only a `world` rank; no friends, regions or share URLs |

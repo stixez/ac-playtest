@@ -19,7 +19,7 @@ export async function launch(options = {}) {
   const {
     build, path: gamePath, phones = 0, headless = true, port = 0, apiVersion, api = 'builtin',
     browser: sharedBrowser, channel, executablePath, browserArgs, mute = true,
-    readyTimeout = 60000, timeout = 10000, viewport, log,
+    readyTimeout = 60000, timeout = 10000, phoneTimeout = 30000, viewport, log,
   } = options;
   const platform = {
     code: options.code, screenSize: options.screenSize, phoneSize: options.phoneSize, scale: options.scale ?? 1,
@@ -35,6 +35,12 @@ export async function launch(options = {}) {
   if (platform.earlyMessages !== undefined && !['drop', 'queue'].includes(platform.earlyMessages)) {
     throw new Error(`earlyMessages must be 'drop' or 'queue', not ${JSON.stringify(platform.earlyMessages)}`);
   }
+  if (platform.seed !== undefined && !Number.isFinite(platform.seed)) {
+    throw new Error(`seed must be a number, not ${JSON.stringify(platform.seed)}`);
+  }
+  if (platform.loadDelay !== undefined && !(Number.isFinite(platform.loadDelay) && platform.loadDelay >= 0)) {
+    throw new Error(`loadDelay must be a number of ms >= 0, not ${JSON.stringify(platform.loadDelay)}`);
+  }
   for (const key of Object.keys(platform)) if (platform[key] === undefined) delete platform[key];
 
   const server = await startServer({ build, path: gamePath, port, apiVersion, api, log });
@@ -47,7 +53,10 @@ export async function launch(options = {}) {
       hasTouch: true, // phones get real touch input (touchscreen.tap, Input.dispatchTouchEvent)
     });
     const page = await context.newPage();
-    const sim = new Sim({ server, browser, ownsBrowser: !sharedBrowser, context, page, timeout });
+    const sim = new Sim({
+      server, browser, ownsBrowser: !sharedBrowser, context, page, timeout, phoneTimeout,
+      loadDelay: platform.loadDelay ?? 1000,
+    });
     await page.exposeFunction('__acPlaytestEmit', (event) => sim._record(event));
     await page.addInitScript((config) => {
       if (window === window.top) window.__AC_PLAYTEST_CONFIG__ = config;
@@ -59,7 +68,15 @@ export async function launch(options = {}) {
         `calls new AirConsole(). Console errors: ${JSON.stringify(sim.consoleErrors().map((e) => e.text))}`);
     });
     await sim.screen.attach();
-    for (let i = 0; i < phones; i++) await sim.addPhone();
+    // One phone at a time until the others were told about it, so ids and connect order are deterministic; then
+    // wait for all pages together, so phones announced before loading are in that state at the same time.
+    const joins = [];
+    for (let i = 0; i < phones; i++) {
+      const join = await sim._startJoin((p) => window.__acPlatform.addPhone(p), undefined, {});
+      await join.connected;
+      joins.push(join);
+    }
+    await Promise.all(joins.map((join) => join.phone));
     return sim;
   } catch (e) {
     await context?.close().catch(() => {});
@@ -92,7 +109,7 @@ function defaultViewport({ screenSize = { width: 1280, height: 720 }, phoneSize 
 }
 
 export class Sim {
-  constructor({ server, browser, ownsBrowser, context, page, timeout }) {
+  constructor({ server, browser, ownsBrowser, context, page, timeout, phoneTimeout, loadDelay }) {
     /** The local HTTP server ({origin, port, root, simUrl, close}). */
     this.server = server;
     /** Playwright objects, for anything the helpers don't cover. */
@@ -105,6 +122,8 @@ export class Sim {
     this.screen = new Device(this, 0);
     this._ownsBrowser = ownsBrowser;
     this._timeout = timeout;
+    this._phoneTimeout = phoneTimeout;
+    this._loadDelay = loadDelay;
     this._phones = new Map();
     this._connected = new Set();
     this._events = [];
@@ -125,14 +144,14 @@ export class Sim {
    * Connects a new phone (loads controller.html in a new frame) and resolves once its AirConsole API is ready
    * and the other devices were told (onConnect). With `joinBeforeLoad: true` the others are told first and the
    * page loads `loadDelay` ms later (see README, "Testing robustness"); this still resolves when the page is ready.
+   * `timeout` (default: launch's phoneTimeout, 30000) does not include loadDelay.
    * @param {{nickname?: string, uid?: string, premium?: boolean, language?: string, joinBeforeLoad?: boolean,
    *   timeout?: number}} [profile]
    */
   async addPhone(profile = {}) {
-    const { timeout = 30000, ...rest } = profile;
-    const since = this.mark();
-    const id = await this.page.evaluate((p) => window.__acPlatform.addPhone(p), rest);
-    return this._whenConnected(id, since, timeout);
+    const { timeout, ...rest } = profile;
+    const join = await this._startJoin((p) => window.__acPlatform.addPhone(p), timeout, rest);
+    return join.phone;
   }
 
   /** Disconnects a phone: its frame is removed, the others get onDeviceStateChange(id, undefined) + onDisconnect. */
@@ -141,36 +160,59 @@ export class Sim {
     const since = this.mark();
     const result = await this.page.evaluate((i) => window.__acPlatform.dropPhone(i), id);
     if (!result) throw new Error(`dropPhone(${id}): no such phone (or it is already disconnected)`);
-    if (result === 'disconnected') await this.waitForEvent({ type: 'disconnect', device: id }, { since });
+    await this.waitForEvent((e) => e.device === id && (e.type === 'disconnect' || e.type === 'removed'), { since });
   }
 
-  /** Reconnects a dropped phone with its old device id, nickname and uid (a fresh controller.html). */
-  async reconnect(id, { timeout = 30000, joinBeforeLoad } = {}) {
+  /**
+   * Reconnects a dropped phone with its old device id, nickname and uid (a fresh controller.html).
+   * `joinBeforeLoad` applies to this join only.
+   */
+  async reconnect(id, { timeout, joinBeforeLoad } = {}) {
     id = idOf(id);
-    const since = this.mark();
-    const ok = await this.page.evaluate(([i, o]) => window.__acPlatform.reconnect(i, o), [id, { joinBeforeLoad }]);
-    if (!ok) throw new Error(`reconnect(${id}): unknown phone, or it is still connected`);
-    return this._whenConnected(id, since, timeout);
+    const join = await this._startJoin(([i, o]) => window.__acPlatform.reconnect(i, o) && i, timeout,
+      [id, { joinBeforeLoad }]);
+    if (join.id === false) throw new Error(`reconnect(${id}): unknown phone, or it is still connected`);
+    return join.phone;
   }
 
-  async _whenConnected(id, since, timeout) {
-    try {
-      // Both orders happen: normally the page's API is ready first; with joinBeforeLoad the announcement is.
-      await Promise.all([
-        this.waitForEvent({ type: 'connect', device: id }, { since, timeout }),
-        this.waitForEvent({ type: 'ready', device: id }, { since, timeout }),
-      ]);
-    } catch {
-      throw new Error(`Phone ${id} did not connect within ${timeout} ms. Does controller.html load the AirConsole ` +
+  /**
+   * Starts a join with `start` (run in the sim page with `arg`; returns the phone id, or false). Resolves with
+   * {id, connected, phone}: `connected` settles when the other devices were told, `phone` when the page's API is
+   * ready too (with the attached Device). Both reject at once if the phone is dropped first.
+   */
+  async _startJoin(start, timeout = this._phoneTimeout, arg) {
+    const since = this.mark();
+    const id = await this.page.evaluate(start, arg);
+    if (id === false) return { id };
+    const limit = timeout + this._loadDelay;
+    const seen = { connect: false, ready: false };
+    const step = (want) => (e) => {
+      if (e.seq <= since || e.device !== id) return undefined;
+      if (e.type === 'disconnect' || e.type === 'removed') {
+        return { error: new Error(`Phone ${id} was dropped before its page loaded`) };
+      }
+      if (e.type === 'connect' || e.type === 'ready') seen[e.type] = true;
+      return want.every((w) => seen[w]) ? { value: true } : undefined;
+    };
+    const timedOut = (error) => {
+      if (!/^Timed out/.test(error.message)) throw error;
+      throw new Error(`Phone ${id} did not connect within ${limit} ms. Does controller.html load the AirConsole ` +
         `API and call new AirConsole()? Console errors: ${JSON.stringify(this.consoleErrors().map((e) => e.text))}`);
-    }
-    let phone = this._phones.get(id);
-    if (!phone) {
-      phone = new Device(this, id);
-      this._phones.set(id, phone);
-    }
-    await phone.attach();
-    return phone;
+    };
+    // Both orders happen: normally the page's API is ready first; with joinBeforeLoad the announcement is.
+    const connected = this._watch(step(['connect']), limit, `phone ${id} to connect`).catch(timedOut);
+    const phone = this._watch(step(['connect', 'ready']), limit, `phone ${id} to load`).catch(timedOut)
+      .then(async () => {
+        let device = this._phones.get(id);
+        if (!device) {
+          device = new Device(this, id);
+          this._phones.set(id, device);
+        }
+        await device.attach();
+        return device;
+      });
+    connected.catch(() => {}); // callers may only await `phone`; it rejects with the same error
+    return { id, connected, phone };
   }
 
   /** The Device for an id (0 = screen). */
@@ -181,9 +223,10 @@ export class Sim {
     return phone;
   }
 
-  /** Connected phones, by id (a phone announced with joinBeforeLoad is listed once addPhone resolved). */
+  /** Connected phones whose page has loaded, by id (never a dropped phone's detached Device). */
   phones() {
-    return [...this._connected].filter((id) => this._phones.has(id)).sort((a, b) => a - b).map((id) => this.device(id));
+    return [...this._connected].filter((id) => this._phones.get(id)?.frame).sort((a, b) => a - b)
+      .map((id) => this.device(id));
   }
 
   // ---- platform controls
@@ -223,9 +266,25 @@ export class Sim {
     this._events.push(event);
     if (this._events.length > MAX_EVENTS) this._events.splice(0, this._events.length - MAX_EVENTS);
     if (event.type === 'connect') this._connected.add(event.device);
-    if (event.type === 'disconnect') this._connected.delete(event.device);
+    if (event.type === 'disconnect' || event.type === 'removed') {
+      this._connected.delete(event.device);
+      const phone = this._phones.get(event.device);
+      if (phone) phone.frame = null; // its frame is gone; reconnect attaches the new one
+    }
+    let changed = [event];
+    if (event.type === 'messageDelivered') {
+      // A queued message reached its phone: from now on it counts as delivered to it (see match.js reached()).
+      const message = this._events.findLast((e) => e.type === 'message' && e.seq === event.message);
+      if (message) {
+        (message.delivered ||= []).push(event.to);
+        changed = [event, message];
+      }
+    }
     for (const waiter of this._waiters) {
-      if (waiter.match(event)) waiter.done(event);
+      for (const e of changed) {
+        const result = waiter.step(e);
+        if (result) { waiter.finish(result); break; }
+      }
     }
   }
 
@@ -260,16 +319,31 @@ export class Sim {
   }
 
   _waitFor(match, timeout, what) {
-    const found = this._events.find(match);
-    if (found) return Promise.resolve(found);
+    return this._watch((e) => (match(e) ? { value: e } : undefined), timeout, what);
+  }
+
+  /**
+   * Feeds every recorded event (past, then new) to `step` until it returns {value} or {error}; times out after
+   * `timeout` ms. The waiter is always removed when it settles.
+   */
+  _watch(step, timeout, what) {
+    for (const e of this._events) {
+      const result = step(e);
+      if (result) return result.error ? Promise.reject(result.error) : Promise.resolve(result.value);
+    }
     if (this._closed) return Promise.reject(new Error('sim is closed'));
     return new Promise((resolve, reject) => {
       const waiter = {
-        match,
-        done: (event) => { clearTimeout(waiter.timer); this._waiters.delete(waiter); resolve(event); },
-        fail: (error) => { clearTimeout(waiter.timer); this._waiters.delete(waiter); reject(error); },
+        step,
+        finish: (result) => {
+          clearTimeout(waiter.timer);
+          this._waiters.delete(waiter);
+          if (result.error) reject(result.error);
+          else resolve(result.value);
+        },
       };
-      waiter.timer = setTimeout(() => waiter.fail(new Error(`Timed out after ${timeout} ms waiting for ${what}`)), timeout);
+      waiter.timer = setTimeout(() => waiter.finish({ error: new Error(`Timed out after ${timeout} ms waiting for ${what}`) }),
+        timeout);
       this._waiters.add(waiter);
     });
   }
@@ -337,7 +411,7 @@ export class Sim {
   async close() {
     if (this._closed) return;
     this._closed = true;
-    for (const waiter of this._waiters) waiter.fail(new Error('sim closed'));
+    for (const waiter of this._waiters) waiter.finish({ error: new Error('sim closed') });
     await this.context.close().catch(() => {});
     if (this._ownsBrowser) await this.browser.close().catch(() => {});
     await this.server.close();

@@ -3,6 +3,38 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-10-13
+
+Fixes from a code review of `joinBeforeLoad` and the phone lifecycle.
+
+### Fixed
+
+- Messages dropped for a phone whose page hadn't loaded no longer count as delivered to it: `phone.messages()`,
+  `lastMessage()`, `waitForMessage()` and `sim.messages({ to })` exclude them. The `message` event lists them in
+  `undelivered`. Queued messages count once they arrive (new `messageDelivered` event).
+- A phone dropped before its page loaded made `addPhone` / `reconnect` wait for the full timeout with a misleading
+  error. They now reject at once ("Phone N was dropped before its page loaded"), and waiters are cleaned up. A
+  phone dropped before it was ever announced is recorded as a `removed` event.
+- `sim.phones()` could return a dropped phone's detached `Device` while it was reconnecting. It now lists only
+  phones whose page has loaded. A dropped `Device` throws a clear error (`liveFrame()`) until it reconnects.
+- `launch({ phones, joinBeforeLoad })` added phones one `loadDelay` at a time. Phones are now announced one after
+  another and their pages awaited together, so several can be announced-but-unloaded at once. Ids and connect
+  order stay deterministic.
+- Phone timeouts included `loadDelay`, so a long `loadDelay` failed launches. The timeout now excludes it, and
+  `launch({ phoneTimeout })` sets the default.
+- `reconnect(id, { joinBeforeLoad })` stuck to later reconnects (and stopped `'random'` drawing). It now applies to
+  that join only.
+- Nickname changes and device motion for a phone that hasn't loaded are now dropped or queued like messages
+  (`messageDropped` / `messageQueued` carry an `action`), instead of being posted to a blank frame.
+- `seed: 0` was treated as `1`. Invalid `seed` / `loadDelay` now reject in `launch()`. Invalid sim-page query
+  settings warn and fall back to the defaults (shown in `state().settings`).
+- A test left a promise rejection unhandled while it waited, which could fail on slow CI.
+
+### Changed
+
+- Internals: whether a phone is "announced but not loaded" is derived from the device list. All sends to a phone
+  go through one path, and the device data is built by one helper.
+
 ## [0.2.0] - 2026-10-13
 
 ### Added
@@ -59,5 +91,6 @@ All notable changes to this project are documented here. The format follows
 - A Unity WebGL screen could take the sim page fullscreen and cover the phones, so every phone tap hit the
   screen. Device frames are no longer allowed to go fullscreen.
 
+[0.2.1]: https://github.com/stixez/ac-playtest/releases/tag/v0.2.1
 [0.2.0]: https://github.com/stixez/ac-playtest/releases/tag/v0.2.0
 [0.1.0]: https://github.com/stixez/ac-playtest/releases/tag/v0.1.0

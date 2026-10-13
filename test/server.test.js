@@ -188,3 +188,19 @@ test('cli: help, version and argument errors', async () => {
   assert.equal(await badPort.exited, 1);
   assert.match(badPort.output(), /--port must be an integer/);
 });
+
+test('sim page: invalid query settings warn and fall back to the defaults', async (t) => {
+  const { launchBrowser } = await import('../src/index.js');
+  const server = await startServer({ build: DUMMY, port: 0 });
+  const browser = await launchBrowser();
+  t.after(async () => { await browser.close(); await server.close(); });
+  const page = await browser.newPage();
+  const warnings = [];
+  page.on('console', (m) => { if (m.type() === 'warning') warnings.push(m.text()); });
+  await page.goto(`${server.simUrl}?joinBeforeLoad=sometimes&earlyMessages=keep&seed=abc&loadDelay=-5`);
+  const settings = await page.evaluate(() => window.__acPlatform.state().settings);
+  assert.deepEqual(settings, { joinBeforeLoad: 'never', earlyMessages: 'drop', seed: 1, loadDelay: 1000 });
+  assert.equal(warnings.length, 4, warnings.join('\n'));
+  await page.goto(`${server.simUrl}?seed=0`);
+  assert.equal((await page.evaluate(() => window.__acPlatform.state().settings)).seed, 0);
+});

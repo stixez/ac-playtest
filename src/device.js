@@ -16,6 +16,12 @@ export class Device {
     this.frame = null;
   }
 
+  /** The device's frame; throws a clear error while the phone is dropped or its page has not loaded. */
+  liveFrame() {
+    if (!this.frame) throw new Error(`device ${this.id} is not connected (dropped, or its page has not loaded yet)`);
+    return this.frame;
+  }
+
   /** The sim page (the top-level page hosting every device frame). */
   get page() { return this.sim.page; }
 
@@ -40,8 +46,8 @@ export class Device {
    */
   locator(target) {
     if (typeof target !== 'string') return target;
-    if (SELECTOR.test(target)) return this.frame.locator(target).first();
-    return this.frame.getByText(target).locator('visible=true').first();
+    if (SELECTOR.test(target)) return this.liveFrame().locator(target).first();
+    return this.liveFrame().getByText(target).locator('visible=true').first();
   }
 
   /**
@@ -133,7 +139,7 @@ export class Device {
   async pagePoint(target) {
     if (isPoint(target)) {
       const box = await this.frameElement.boundingBox();
-      const innerWidth = await this.frame.evaluate(() => window.innerWidth);
+      const innerWidth = await this.liveFrame().evaluate(() => window.innerWidth);
       const scale = box.width / innerWidth;
       return { x: box.x + target.x * scale, y: box.y + target.y * scale };
     }
@@ -149,7 +155,7 @@ export class Device {
   }
 
   /** Runs a function in this device's frame (Playwright frame.evaluate). */
-  evaluate(fn, arg) { return this.frame.evaluate(fn, arg); }
+  evaluate(fn, arg) { return this.liveFrame().evaluate(fn, arg); }
 
   /** Sends a message as if this device's game had called airconsole.message(to, data) (to: undefined = broadcast). */
   async send(data, to = this.isScreen ? undefined : 0) {

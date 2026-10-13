@@ -30,6 +30,8 @@ export interface LaunchOptions {
   readyTimeout?: number;
   /** Default timeout of the waitFor* helpers in ms. Default 10000. */
   timeout?: number;
+  /** Ms each phone may take to connect (launch phones, addPhone, reconnect), plus loadDelay. Default 30000. */
+  phoneTimeout?: number;
   /** Browser viewport; default fits the screen and two phones beside it, in either orientation. */
   viewport?: Size;
   /** Server log lines (404s, API version notes). */
@@ -71,7 +73,10 @@ export interface LaunchOptions {
   seed?: number;
   /** Ms between an early appearance and the controller page loading. Default 1000. */
   loadDelay?: number;
-  /** Messages to a phone that appeared but hasn't loaded: dropped (default) or queued until it is ready. */
+  /**
+   * Messages (and nickname changes, device motion) for a phone that appeared but hasn't loaded: dropped (default)
+   * or queued until it is ready.
+   */
   earlyMessages?: 'drop' | 'queue';
 }
 
@@ -82,7 +87,7 @@ export interface PhoneProfile {
   language?: string;
   /** Appear to the others before the controller page loads (overrides the launch-level joinBeforeLoad). */
   joinBeforeLoad?: boolean;
-  /** Ms to wait for the phone to connect. Default 30000. */
+  /** Ms to wait for the phone to connect, plus loadDelay. Default: launch's phoneTimeout (30000). */
   timeout?: number;
 }
 
@@ -90,7 +95,8 @@ export interface PhoneProfile {
 export interface SimEvent {
   seq: number;
   time: number;
-  type: 'ready' | 'join' | 'connect' | 'disconnect' | 'message' | 'messageDropped' | 'messageQueued' | 'custom' | 'players' | 'ad' | 'pause' | 'resume'
+  type: 'ready' | 'join' | 'connect' | 'disconnect' | 'removed' | 'message' | 'messageDropped' | 'messageQueued'
+    | 'messageDelivered' | 'custom' | 'players' | 'ad' | 'pause' | 'resume'
     | 'premium' | 'profile' | 'navigate' | 'vibrate' | 'orientation' | 'immersive' | 'highScoreStored' | 'highScores'
     | 'persistentStore' | 'persistentRequest' | 'jserror' | 'platformEvent' | 'set' | string;
   device?: number;
@@ -103,9 +109,13 @@ export interface SimMessage extends SimEvent {
   from: number;
   to: number | 'all';
   data: any;
+  /** Recipients whose page had not loaded when it was sent (dropped, or queued until `delivered`). */
+  undelivered?: number[];
+  /** Recipients that received it later from the queue. */
+  delivered?: number[];
 }
 
-/** {from, to, type}: `type` is compared with `data.type`; `to: n` includes broadcasts that reached n. */
+/** {from, to, type}: `type` is compared with `data.type`; `to: n` means delivered to n (incl. broadcasts). */
 export type MessageFilter = { from?: number; to?: number | 'all'; type?: unknown } | ((message: SimMessage) => boolean);
 export type EventFilter = Partial<SimEvent> | ((event: SimEvent) => boolean);
 export interface WaitOptions {
@@ -146,8 +156,13 @@ export interface DragOptions {
 export class Device {
   readonly sim: Sim;
   readonly id: number;
-  /** The device's frame (replaced when a phone reconnects). */
+  /**
+   * The device's frame (replaced when a phone reconnects). At run time it is null while a phone is dropped or
+   * not loaded yet; liveFrame() throws a clear error instead.
+   */
   readonly frame: Frame;
+  /** The frame, or a clear error if the phone is dropped / not loaded. */
+  liveFrame(): Frame;
   readonly page: Page;
   readonly isScreen: boolean;
   /** Locator of the device's <iframe> element in the sim page. */
@@ -185,9 +200,10 @@ export class Sim {
 
   addPhone(profile?: PhoneProfile): Promise<Device>;
   dropPhone(phone: number | Device): Promise<void>;
+  /** joinBeforeLoad applies to this join only. */
   reconnect(phone: number | Device, options?: { timeout?: number; joinBeforeLoad?: boolean }): Promise<Device>;
   device(id: number): Device;
-  /** Connected phones, by id. */
+  /** Connected phones whose page has loaded, by id. */
   phones(): Device[];
 
   pause(): Promise<void>;
