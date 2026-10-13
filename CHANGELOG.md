@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `examples/demo-game`, *Starlight Scramble*: a small, dependency-free party game for the README. Phones steer ships
+  with a floating joystick and fire; first to 5 wins.
+- `examples/demo-playtest.mjs`: a playtest that plays the demo (reads the ships, steers by touch drag toward an
+  opponent, fires until it scores), run by `test/demo.test.js`.
+- `docs/demo.gif` and a new `docs/hero.png`, both recorded with ac-playtest by `docs/media.mjs` (needs ffmpeg).
+  `docs/hero.mjs` is gone.
+
 ## [0.2.1] - 2026-10-13
 
 Fixes from a code review of `joinBeforeLoad` and the phone lifecycle.

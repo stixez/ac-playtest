@@ -56,7 +56,10 @@
     "test": "node --test --test-timeout=120000 test/*.test.js",
     "test:official": "node --test --test-timeout=120000 test/official-api.test.js",
     "example": "node examples/playtest.mjs",
-    "serve:example": "node bin/ac-playtest.js serve examples/dummy-game --open"
+    "serve:example": "node bin/ac-playtest.js serve examples/dummy-game --open",
+    "demo:playtest": "node examples/demo-playtest.mjs",
+    "serve:demo": "node bin/ac-playtest.js serve examples/demo-game --open",
+    "media": "node docs/media.mjs"
   },
   "dependencies": {
     "playwright-core": "^1.63.0"

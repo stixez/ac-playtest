@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Starlight Scramble: screen</title>
+<!-- The usual AirConsole API tag. ac-playtest serves its offline stand-in in its place. -->
+<script src="https://www.airconsole.com/api/airconsole-1.11.0.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: #050816; overflow: hidden; }
+  canvas { position: absolute; inset: 0; margin: auto; display: block; }
+</style>
+</head>
+<body>
+<canvas id="arena"></canvas>
+<script>
+/*
+ * Starlight Scramble: the TV side of ac-playtest's demo game (MIT). Every phone flies a ship. Steer by dragging
+ * on the phone, tap FIRE, and hit another ship to score. The first to 5 wins the round.
+ *
+ * Messages, phone -> screen: {t: 'hello'} (from the controller's onReady), {t: 's', x, y} (steer, -1..1), {t: 'f'}.
+ * Screen -> phone: {t: 'you', name, color, score}, {t: 'score', score}, {t: 'hit', by}, {t: 'win', name, color,
+ * you}, {t: 'round'}.
+ * window.demo.state() exposes ships and scores for scripted playtests.
+ */
+(function () {
+  'use strict';
+  var W = 1280, H = 720, WIN_SCORE = 5;
+  var COLORS = ['#ff6b8b', '#4dd4ff', '#ffd166', '#7ae582', '#c49bff', '#ff9f43', '#00e0c6', '#f6f7fb'];
+  var FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+
+  var airconsole = new AirConsole();
+  var canvas = document.getElementById('arena');
+  var ctx = canvas.getContext('2d');
+  var ships = new Map();     // device id -> ship
+  var bullets = [];
+  var particles = [];
+  var floaters = [];
+  var winner = null;         // {id, name, color, at}
+  var code = '';
+  var now = performance.now();
+
+  // ---------------------------------------------------------------- layout
+  var scale = 1, dpr = 1;
+  function fit() {
+    dpr = window.devicePixelRatio || 1;
+    scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+    canvas.style.width = Math.round(W * scale) + 'px';
+    canvas.style.height = Math.round(H * scale) + 'px';
+    canvas.width = Math.round(W * scale * dpr);
+    canvas.height = Math.round(H * scale * dpr);
+  }
+  window.addEventListener('resize', fit);
+  fit();
+
+  // ---------------------------------------------------------------- static background (drawn once)
+  function seeded(seed) {
+    return function () {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+  }
+  var rnd = seeded(42);
+  var stars = [];
+  for (var i = 0; i < 240; i++) {
+    stars.push({ x: rnd() * W, y: rnd() * H, r: rnd() < 0.85 ? 0.6 + rnd() * 0.9 : 1.4 + rnd() * 1.1,
+      phase: rnd() * Math.PI * 2, speed: 0.6 + rnd() * 1.8 });
+  }
+  var backdrop = document.createElement('canvas');
+  backdrop.width = W; backdrop.height = H;
+  (function paintBackdrop(b) {
+    var sky = b.createLinearGradient(0, 0, 0, H);
+    sky.addColorStop(0, '#0b1033'); sky.addColorStop(0.55, '#141a4a'); sky.addColorStop(1, '#2a1748');
+    b.fillStyle = sky; b.fillRect(0, 0, W, H);
+    [[260, 180, 380, 'rgba(120, 80, 255, 0.20)'], [1000, 160, 300, 'rgba(0, 200, 255, 0.12)'],
+      [640, 620, 520, 'rgba(255, 90, 160, 0.12)']].forEach(function (n) {
+      var g = b.createRadialGradient(n[0], n[1], 0, n[0], n[1], n[2]);
+      g.addColorStop(0, n[3]); g.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      b.fillStyle = g; b.fillRect(0, 0, W, H);
+    });
+    // a ringed planet in the corner
+    var px = 1150, py = 760, pr = 230;
+    var planet = b.createRadialGradient(px - 80, py - 110, 20, px, py, pr);
+    planet.addColorStop(0, '#6e5bd6'); planet.addColorStop(0.6, '#3a2c86'); planet.addColorStop(1, '#1b1446');
+    b.fillStyle = planet; b.beginPath(); b.arc(px, py, pr, 0, Math.PI * 2); b.fill();
+    b.save(); b.translate(px, py); b.rotate(-0.28);
+    b.strokeStyle = 'rgba(200, 185, 255, 0.35)'; b.lineWidth = 6;
+    b.beginPath(); b.ellipse(0, 0, pr * 1.55, pr * 0.32, 0, Math.PI * 1.04, Math.PI * 1.96); b.stroke();
+    b.restore();
+  })(backdrop.getContext('2d'));
+
+  // ---------------------------------------------------------------- ships
+  function freeColor() {
+    var used = {};
+    ships.forEach(function (s) { if (!s.leaving) used[s.color] = true; });
+    for (var c = 0; c < COLORS.length; c++) if (!used[COLORS[c]]) return COLORS[c];
+    return COLORS[ships.size % COLORS.length];
+  }
+
+  function spawnPoint(index) {
+    var a = -Math.PI / 2 + index * 2.4;
+    return { x: W / 2 + Math.cos(a) * 330, y: H / 2 + 20 + Math.sin(a) * 190, angle: a + Math.PI / 2 };
+  }
+
+  function addShip(id) {
+    if (ships.has(id) && !ships.get(id).leaving) return ships.get(id);
+    var p = spawnPoint(id);
+    var from = { x: W / 2 + (p.x - W / 2) * 3, y: H / 2 + (p.y - H / 2) * 3 };
+    var ship = {
+      id: id, name: airconsole.getNickname(id) || 'Player ' + id, color: freeColor(), score: 0,
+      x: from.x, y: from.y, angle: Math.atan2(p.y - from.y, p.x - from.x), speed: 0,
+      steer: { x: 0, y: 0 }, spawnFrom: from, spawnTo: p, born: now, leaving: 0, lastFire: 0, invulnerable: 0
+    };
+    ships.set(id, ship);
+    return ship;
+  }
+
+  function removeShip(id) {
+    var ship = ships.get(id);
+    if (ship && !ship.leaving) ship.leaving = now;
+  }
+
+  function send(id, data) { airconsole.message(id, data); }
+  function hello(ship) { send(ship.id, { t: 'you', name: ship.name, color: ship.color, score: ship.score }); }
+
+  // ---------------------------------------------------------------- AirConsole
+  airconsole.onReady = function (c) {
+    code = c;
+    airconsole.getControllerDeviceIds().forEach(addShip);
+  };
+  airconsole.onConnect = function (id) { addShip(id); };
+  airconsole.onDisconnect = function (id) { removeShip(id); };
+  airconsole.onDeviceProfileChange = function (id) {
+    var ship = ships.get(id);
+    if (ship) ship.name = airconsole.getNickname(id);
+  };
+  airconsole.onMessage = function (from, data) {
+    if (!data) return;
+    var ship = ships.get(from);
+    if (data.t === 'hello') {
+      hello(ship && !ship.leaving ? ship : addShip(from)); // robust to phones that connect before they load
+    } else if (ship && data.t === 's') {
+      ship.steer.x = clamp(Number(data.x) || 0, -1, 1);
+      ship.steer.y = clamp(Number(data.y) || 0, -1, 1);
+    } else if (ship && data.t === 'f') {
+      fire(ship);
+    }
+  };
+
+  // ---------------------------------------------------------------- rules
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function easeOut(t) { return 1 - Math.pow(1 - clamp(t, 0, 1), 3); }
+  function flying(ship) { return !ship.leaving && now - ship.born > 900; }
+
+  function fire(ship) {
+    if (!flying(ship) || winner || now - ship.lastFire < 200) return;
+    ship.lastFire = now;
+    var dx = Math.cos(ship.angle), dy = Math.sin(ship.angle);
+    bullets.push({ x: ship.x + dx * 24, y: ship.y + dy * 24, vx: dx * (640 + ship.speed), vy: dy * (640 + ship.speed),
+      owner: ship.id, color: ship.color, born: now });
+  }
+
+  function burst(x, y, color, count, speed) {
+    for (var i = 0; i < count; i++) {
+      var a = Math.random() * Math.PI * 2, v = speed * (0.3 + Math.random() * 0.7);
+      particles.push({ x: x, y: y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, born: now, life: 500 + Math.random() * 500,
+        color: Math.random() < 0.3 ? '#ffffff' : color, size: 1.5 + Math.random() * 2.5 });
+    }
+  }
+
+  function hit(shooter, victim) {
+    victim.invulnerable = now + 1200;
+    victim.angle += Math.PI * (0.6 + Math.random() * 0.8);
+    burst(victim.x, victim.y, victim.color, 42, 260);
+    send(victim.id, { t: 'hit', by: shooter.name });
+    if (winner || shooter.leaving) return;
+    shooter.score++;
+    floaters.push({ x: shooter.x, y: shooter.y - 40, text: '+1', color: shooter.color, born: now });
+    send(shooter.id, { t: 'score', score: shooter.score });
+    if (shooter.score >= WIN_SCORE) {
+      winner = { id: shooter.id, name: shooter.name, color: shooter.color, at: now };
+      ships.forEach(function (s) {
+        send(s.id, { t: 'win', name: shooter.name, color: shooter.color, you: s.id === shooter.id });
+      });
+      for (var i = 0; i < 6; i++) burst(W / 2 + (i - 2.5) * 140, H / 2 - 40, COLORS[i], 30, 340);
+    }
+  }
+
+  function newRound() {
+    winner = null;
+    bullets = [];
+    ships.forEach(function (s) {
+      s.score = 0;
+      send(s.id, { t: 'round' });
+      send(s.id, { t: 'score', score: 0 });
+    });
+  }
+
+  function wrap(v, max) { return v < -30 ? v + max + 60 : v > max + 30 ? v - max - 60 : v; }
+
+  function update(dt) {
+    ships.forEach(function (s, id) {
+      if (s.leaving && now - s.leaving > 600) { ships.delete(id); return; }
+      if (now - s.born < 900) {
+        var k = easeOut((now - s.born) / 900);
+        s.x = s.spawnFrom.x + (s.spawnTo.x - s.spawnFrom.x) * k;
+        s.y = s.spawnFrom.y + (s.spawnTo.y - s.spawnFrom.y) * k;
+        s.angle = s.spawnTo.angle * k + Math.atan2(s.spawnTo.y - s.spawnFrom.y, s.spawnTo.x - s.spawnFrom.x) * (1 - k);
+        s.speed = 140;
+        return;
+      }
+      // Ships always cruise; the stick turns them and adds thrust.
+      var mag = Math.min(1, Math.hypot(s.steer.x, s.steer.y));
+      if (mag > 0.15) {
+        var want = Math.atan2(s.steer.y, s.steer.x);
+        var diff = Math.atan2(Math.sin(want - s.angle), Math.cos(want - s.angle));
+        s.angle += clamp(diff, -4.2 * dt, 4.2 * dt);
+      }
+      var target = 120 + 200 * mag;
+      s.speed += (target - s.speed) * Math.min(1, dt * 3);
+      s.x = wrap(s.x + Math.cos(s.angle) * s.speed * dt, W);
+      s.y = wrap(s.y + Math.sin(s.angle) * s.speed * dt, H);
+      if (Math.random() < 0.9) {
+        particles.push({ x: s.x - Math.cos(s.angle) * 16, y: s.y - Math.sin(s.angle) * 16, vx: 0, vy: 0, born: now,
+          life: 420, color: s.color, size: 2.2, trail: true });
+      }
+    });
+    bullets = bullets.filter(function (b) {
+      b.x += b.vx * dt; b.y += b.vy * dt;
+      if (now - b.born > 1100 || b.x < -40 || b.x > W + 40 || b.y < -40 || b.y > H + 40) return false;
+      var target = null;
+      ships.forEach(function (s) {
+        if (!target && s.id !== b.owner && flying(s) && now > s.invulnerable && Math.hypot(s.x - b.x, s.y - b.y) < 32) target = s;
+      });
+      if (target) {
+        var shooter = ships.get(b.owner);
+        if (shooter) hit(shooter, target);
+        return false;
+      }
+      return true;
+    });
+    particles = particles.filter(function (p) {
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.97; p.vy *= 0.97;
+      return now - p.born < p.life;
+    }).slice(-900);
+    floaters = floaters.filter(function (f) { return now - f.born < 1000; });
+    if (winner && now - winner.at > 4000) newRound();
+  }
+
+  // ---------------------------------------------------------------- drawing
+  function text(str, x, y, size, weight, color, align, spacing) {
+    ctx.font = weight + ' ' + size + 'px ' + FONT;
+    ctx.textAlign = align || 'left';
+    ctx.fillStyle = color;
+    if (spacing) ctx.letterSpacing = spacing + 'px';
+    ctx.fillText(str, x, y);
+    if (spacing) ctx.letterSpacing = '0px';
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, r);
+  }
+
+  function crown(x, y, s) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(s, s);
+    ctx.beginPath();
+    ctx.moveTo(-11, 6); ctx.lineTo(-13, -6); ctx.lineTo(-5, 0); ctx.lineTo(0, -9); ctx.lineTo(5, 0); ctx.lineTo(13, -6);
+    ctx.lineTo(11, 6); ctx.closePath();
+    ctx.fillStyle = '#ffd166';
+    ctx.shadowColor = 'rgba(255, 209, 102, 0.8)'; ctx.shadowBlur = 10;
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawShip(s, master) {
+    var appear = easeOut((now - s.born) / 900);
+    var alpha = s.leaving ? 1 - clamp((now - s.leaving) / 600, 0, 1) : appear;
+    var size = s.leaving ? 1 - 0.4 * clamp((now - s.leaving) / 600, 0, 1) : 0.4 + 0.6 * appear;
+    if (now < s.invulnerable && Math.floor(now / 90) % 2) alpha *= 0.35;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(s.x, s.y);
+    ctx.save();
+    ctx.rotate(s.angle);
+    ctx.scale(size * 1.7, size * 1.7);
+    // engine flame
+    var flame = 10 + s.speed / 22 + Math.random() * 5;
+    var fg = ctx.createLinearGradient(-8, 0, -8 - flame, 0);
+    fg.addColorStop(0, 'rgba(255, 236, 170, 0.95)'); fg.addColorStop(0.5, 'rgba(255, 150, 70, 0.7)');
+    fg.addColorStop(1, 'rgba(255, 80, 60, 0)');
+    ctx.fillStyle = fg;
+    ctx.beginPath(); ctx.moveTo(-7, -5); ctx.lineTo(-8 - flame, 0); ctx.lineTo(-7, 5); ctx.closePath(); ctx.fill();
+    // hull
+    ctx.shadowColor = s.color; ctx.shadowBlur = 22;
+    var hull = ctx.createLinearGradient(-12, 0, 20, 0);
+    hull.addColorStop(0, s.color); hull.addColorStop(1, '#ffffff');
+    ctx.fillStyle = hull;
+    ctx.beginPath();
+    ctx.moveTo(20, 0); ctx.lineTo(-12, -13); ctx.lineTo(-6, 0); ctx.lineTo(-12, 13); ctx.closePath();
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = s.color;
+    ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(-9, -9); ctx.lineTo(-4, 0); ctx.lineTo(-9, 9); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(10, 16, 48, 0.85)';
+    ctx.beginPath(); ctx.ellipse(4, 0, 4.5, 2.6, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    // name tag
+    ctx.font = '700 20px ' + FONT;
+    var w = ctx.measureText(s.name).width + 30;
+    roundRect(-w / 2, 38, w, 30, 15);
+    ctx.fillStyle = 'rgba(6, 10, 32, 0.74)'; ctx.fill();
+    ctx.fillStyle = s.color;
+    ctx.beginPath(); ctx.arc(-w / 2 + 15, 53, 5, 0, Math.PI * 2); ctx.fill();
+    text(s.name, 6, 60, 20, 700, '#f4f6ff', 'center');
+    if (master) crown(0, -44, 1.4);
+    ctx.restore();
+  }
+
+  function drawScoreboard(list, master) {
+    var x = W - 300, y = 24, rowH = 40;
+    var h = 56 + Math.max(1, list.length) * rowH;
+    roundRect(x, y, 276, h, 18);
+    ctx.fillStyle = 'rgba(8, 12, 36, 0.62)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.10)'; ctx.lineWidth = 1; ctx.stroke();
+    text('SCORE', x + 22, y + 34, 14, 700, 'rgba(220, 226, 255, 0.65)', 'left', 3);
+    text('first to ' + WIN_SCORE, x + 254, y + 34, 13, 500, 'rgba(220, 226, 255, 0.45)', 'right');
+    list.forEach(function (s, i) {
+      var ry = y + 64 + i * rowH;
+      ctx.fillStyle = s.color;
+      ctx.beginPath(); ctx.arc(x + 30, ry + 6, 7, 0, Math.PI * 2); ctx.fill();
+      var name = s.name.length > 11 ? s.name.slice(0, 10) + '…' : s.name;
+      text(name, x + 48, ry + 12, 19, 650, '#f4f6ff');
+      if (s.id === master) {
+        ctx.font = '650 19px ' + FONT;
+        crown(x + 48 + ctx.measureText(name).width + 16, ry + 4, 0.7);
+      }
+      for (var p = 0; p < WIN_SCORE; p++) {
+        ctx.beginPath(); ctx.arc(x + 172 + p * 18, ry + 6, 5.5, 0, Math.PI * 2);
+        ctx.fillStyle = p < s.score ? s.color : 'rgba(255, 255, 255, 0.14)';
+        ctx.fill();
+      }
+    });
+  }
+
+  function draw() {
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+    ctx.drawImage(backdrop, 0, 0);
+    var t = now / 1000;
+    stars.forEach(function (s) {
+      ctx.globalAlpha = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(t * s.speed + s.phase));
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+
+    particles.forEach(function (p) {
+      var k = 1 - (now - p.born) / p.life;
+      ctx.globalAlpha = p.trail ? k * 0.55 : k;
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (p.trail ? k : 1), 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+
+    ctx.lineCap = 'round';
+    bullets.forEach(function (b) {
+      ctx.shadowColor = b.color; ctx.shadowBlur = 14;
+      ctx.strokeStyle = b.color; ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.moveTo(b.x - b.vx * 0.022, b.y - b.vy * 0.022); ctx.lineTo(b.x, b.y); ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(b.x - b.vx * 0.012, b.y - b.vy * 0.012); ctx.lineTo(b.x, b.y); ctx.stroke();
+    });
+
+    var master = airconsole.device_id === undefined ? undefined : airconsole.getMasterControllerDeviceId();
+    ships.forEach(function (s) { drawShip(s, s.id === master); });
+
+    floaters.forEach(function (f) {
+      var k = (now - f.born) / 1000;
+      ctx.globalAlpha = 1 - k;
+      text(f.text, f.x, f.y - k * 40, 28, 800, f.color, 'center');
+    });
+    ctx.globalAlpha = 1;
+
+    text('STARLIGHT SCRAMBLE', 32, 52, 22, 800, '#ffffff', 'left', 4);
+    text('Steer by dragging on your phone · tap FIRE', 33, 78, 15, 500, 'rgba(220, 226, 255, 0.6)');
+
+    var list = [];
+    ships.forEach(function (s) { if (!s.leaving) list.push(s); });
+    if (list.length) {
+      drawScoreboard(list, master);
+      text('Join with your phone' + (code ? ' · code ' + code : ''), 32, H - 28, 15, 500, 'rgba(220, 226, 255, 0.55)');
+    } else {
+      var pulse = 0.6 + 0.4 * Math.sin(t * 2.4);
+      text('Waiting for players', W / 2, H / 2 - 10, 54, 800, '#ffffff', 'center');
+      text('Join with your phone' + (code ? '  ·  code ' + code : ''), W / 2, H / 2 + 36, 22, 500,
+        'rgba(220, 226, 255, ' + pulse.toFixed(2) + ')', 'center');
+    }
+
+    if (winner) {
+      var k = easeOut((now - winner.at) / 500);
+      ctx.fillStyle = 'rgba(4, 6, 20, ' + (0.45 * k).toFixed(3) + ')';
+      ctx.fillRect(0, 0, W, H);
+      ctx.save();
+      ctx.translate(W / 2, H / 2 - 20);
+      ctx.scale(0.8 + 0.2 * k, 0.8 + 0.2 * k);
+      ctx.shadowColor = winner.color; ctx.shadowBlur = 30;
+      text(winner.name + ' wins!', 0, 0, 84, 900, winner.color, 'center');
+      ctx.shadowBlur = 0;
+      text('Next round in ' + Math.max(1, Math.ceil((4000 - (now - winner.at)) / 1000)), 0, 52, 22, 600,
+        'rgba(240, 244, 255, 0.85)', 'center');
+      ctx.restore();
+    }
+  }
+
+  function frame(t) {
+    var dt = Math.min(1 / 30, (t - now) / 1000);
+    now = t;
+    if (dt > 0) update(dt);
+    draw();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  window.demo = {
+    state: function () {
+      var out = [];
+      ships.forEach(function (s) {
+        out.push({ id: s.id, name: s.name, color: s.color, score: s.score, x: s.x, y: s.y, angle: s.angle,
+          flying: flying(s), invulnerable: now < s.invulnerable });
+      });
+      return { ships: out, winner: winner && winner.name, size: { width: W, height: H } };
+    }
+  };
+})();
+</script>
+</body>
+</html>

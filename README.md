@@ -9,7 +9,9 @@ simulation of the AirConsole platform (one TV screen plus any number of phones) 
 in it by hand, or script whole sessions with [Playwright](https://playwright.dev) and run them in CI: phones
 joining and leaving, taps and drags on the real controller UI, pause/resume and ads.
 
-![The sim page: the TV screen of a small example game and two phones, one of them after a drag on its touch pad](docs/hero.png)
+![ac-playtest running the demo game: three phones join, steer their ships by dragging and fire until one scores](docs/demo.gif)
+
+<sub>The demo game in the sim, recorded by a script that uses ac-playtest itself ([`docs/media.mjs`](docs/media.mjs)).</sub>
 
 > **Unofficial.** ac-playtest is not affiliated with or endorsed by AirConsole / N-Dream AG. AirConsole is a
 > trademark of its owner. It ships its own independently written stand-in for the AirConsole JS API and does not bundle
@@ -76,6 +78,24 @@ try {
 [`examples/playtest.mjs`](examples/playtest.mjs) is a complete script that drives
 [`examples/dummy-game`](examples/dummy-game), a tiny plain-HTML AirConsole game. Run it with
 `npm run example`.
+
+## Try the demo
+
+[`examples/demo-game`](examples/demo-game) is a small party game made for this page, *Starlight Scramble*. Every
+phone flies a ship: drag anywhere to steer, tap FIRE, and hit another ship to score. The first to 5 wins. It is
+plain HTML and canvas with no dependencies, so it runs offline.
+
+```sh
+git clone https://github.com/stixez/ac-playtest && cd ac-playtest && npm install
+node bin/ac-playtest.js serve examples/demo-game --open      # with ac-playtest installed: npx ac-playtest serve …
+npm run demo:playtest                                        # the scripted version, headless
+```
+
+[`examples/demo-playtest.mjs`](examples/demo-playtest.mjs) shows a playtest that *plays*. It reads the ships from
+the screen, steers one phone's joystick toward the nearest opponent with real touch drags, and taps FIRE until it
+scores. A test runs it on every CI build.
+
+![The sim page with the demo game: Leo steers with the joystick on his phone while Zoe fires](docs/hero.png)
 
 ## CLI
 

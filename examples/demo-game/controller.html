@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Starlight Scramble: controller</title>
+<script src="https://www.airconsole.com/api/airconsole-1.11.0.js"></script>
+<style>
+  :root { --me: #8a93b8; --ink: #f4f6ff; --bg: #0b1033; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink); user-select: none; }
+  body { display: flex; flex-direction: column; background: radial-gradient(120% 90% at 50% 0%, #1d2466 0%, #0b1033 60%, #070a22 100%); }
+  header { display: flex; align-items: center; gap: 12px; height: 64px; padding: 0 18px; background: var(--me);
+    color: #0b1033; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); transition: background 0.4s; flex: none; }
+  #name { font-size: 22px; font-weight: 800; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #score { font-size: 15px; font-weight: 700; background: rgba(11, 16, 51, 0.18); padding: 6px 12px; border-radius: 999px; }
+  main { flex: 1; display: flex; min-height: 0; }
+  #zone { position: relative; flex: 1; touch-action: none; overflow: hidden; }
+  #hint { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 14px; align-items: center;
+    justify-content: center; text-align: center; color: rgba(220, 226, 255, 0.5); font-size: 17px; font-weight: 600;
+    pointer-events: none; transition: opacity 0.2s; }
+  #hint::before { content: ""; width: 96px; height: 96px; border-radius: 50%; border: 2px dashed rgba(220, 226, 255, 0.28);
+    box-shadow: inset 0 0 0 26px rgba(255, 255, 255, 0.03); }
+  #base { position: absolute; width: 140px; height: 140px; margin: -70px 0 0 -70px; border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.25); background: rgba(255, 255, 255, 0.06); opacity: 0; transition: opacity 0.15s;
+    pointer-events: none; }
+  #knob { position: absolute; left: 50%; top: 50%; width: 62px; height: 62px; margin: -31px 0 0 -31px; border-radius: 50%;
+    background: var(--me); box-shadow: 0 0 24px var(--me), inset 0 -4px 0 rgba(0, 0, 0, 0.2); }
+  .steering #base { opacity: 1; }
+  .steering #hint { opacity: 0; }
+  #fireArea { flex: none; width: 42%; display: flex; align-items: center; justify-content: center; }
+  #fire { width: min(150px, 30vw, 34vh); height: min(150px, 30vw, 34vh); border-radius: 50%; border: 0;
+    background: radial-gradient(circle at 35% 30%, #ffb3c4, #ff4d7a 55%, #c81e4e); color: #fff; font-family: inherit;
+    font-size: 26px; font-weight: 900; letter-spacing: 3px; box-shadow: 0 10px 0 #8e1236, 0 18px 40px rgba(255, 77, 122, 0.45); touch-action: none; }
+  #fire.down { transform: translateY(6px); box-shadow: 0 4px 0 #8e1236, 0 10px 24px rgba(255, 77, 122, 0.45); }
+  @media (orientation: portrait) {
+    main { flex-direction: column; }
+    #fireArea { width: auto; height: 36%; }
+  }
+  #flash { position: fixed; inset: 0; background: rgba(255, 60, 90, 0.45); opacity: 0; pointer-events: none; transition: opacity 0.35s; }
+  #flash.on { opacity: 1; transition: none; }
+  #banner { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column;
+    gap: 8px; background: rgba(5, 8, 24, 0.82); font-size: 30px; font-weight: 900; text-align: center; padding: 20px; }
+  #banner small { font-size: 16px; font-weight: 600; color: rgba(220, 226, 255, 0.7); }
+  #banner.on { display: flex; }
+</style>
+</head>
+<body>
+<header><span id="name">Connecting…</span><span id="score">0 / 5</span></header>
+<main>
+  <div id="zone"><div id="hint">Drag anywhere to steer</div><div id="base"><div id="knob"></div></div></div>
+  <div id="fireArea"><button id="fire">FIRE</button></div>
+</main>
+<div id="flash"></div>
+<div id="banner"></div>
+<script>
+/*
+ * Starlight Scramble: the phone side of ac-playtest's demo game (MIT). Drag anywhere to steer (a floating
+ * joystick), tap or hold FIRE. Steering goes out at most 20 times a second.
+ */
+(function () {
+  'use strict';
+  var airconsole = new AirConsole({ orientation: AirConsole.ORIENTATION_PORTRAIT });
+  var $ = function (id) { return document.getElementById(id); };
+  var RADIUS = 56, SEND_EVERY = 50;
+
+  function toScreen(data) { airconsole.message(AirConsole.SCREEN, data); }
+
+  // Say hello from onReady: the screen answers with our colour. This also works when the screen already saw
+  // us connect before this page had loaded (and so couldn't reach us yet).
+  airconsole.onReady = function () { toScreen({ t: 'hello' }); };
+
+  airconsole.onMessage = function (from, data) {
+    if (from !== AirConsole.SCREEN || !data) return;
+    if (data.t === 'you') {
+      document.documentElement.style.setProperty('--me', data.color);
+      $('name').textContent = data.name;
+      setScore(data.score);
+    } else if (data.t === 'score') {
+      setScore(data.score);
+    } else if (data.t === 'hit') {
+      $('flash').classList.add('on');
+      setTimeout(function () { $('flash').classList.remove('on'); }, 60);
+      airconsole.vibrate(120);
+    } else if (data.t === 'win') {
+      $('banner').innerHTML = '';
+      var title = document.createElement('div');
+      title.textContent = data.you ? 'You win!' : data.name + ' wins!';
+      title.style.color = data.color;
+      var sub = document.createElement('small');
+      sub.textContent = 'Next round starts in a moment';
+      $('banner').append(title, sub);
+      $('banner').classList.add('on');
+    } else if (data.t === 'round') {
+      $('banner').classList.remove('on');
+    }
+  };
+
+  function setScore(score) { $('score').textContent = (score || 0) + ' / 5'; }
+
+  // ---- floating joystick: the base appears where the finger lands
+  var zone = $('zone'), base = $('base'), knob = $('knob');
+  var stick = null;                  // {id, x, y} while steering
+  var vector = { x: 0, y: 0 }, sent = { x: 0, y: 0 }, lastSend = 0, timer = 0;
+
+  function flush() {
+    timer = 0;
+    if (vector.x === sent.x && vector.y === sent.y) return;
+    sent = { x: vector.x, y: vector.y };
+    lastSend = Date.now();
+    toScreen({ t: 's', x: sent.x, y: sent.y });
+  }
+  function queue() {
+    var wait = SEND_EVERY - (Date.now() - lastSend);
+    if (wait <= 0) flush();
+    else if (!timer) timer = setTimeout(flush, wait);
+  }
+
+  zone.addEventListener('pointerdown', function (e) {
+    if (stick) return;
+    var r = zone.getBoundingClientRect();
+    stick = { id: e.pointerId, x: e.clientX - r.left, y: e.clientY - r.top };
+    zone.setPointerCapture(e.pointerId);
+    base.style.left = stick.x + 'px';
+    base.style.top = stick.y + 'px';
+    knob.style.transform = '';
+    zone.classList.add('steering');
+  });
+  zone.addEventListener('pointermove', function (e) {
+    if (!stick || e.pointerId !== stick.id) return;
+    var r = zone.getBoundingClientRect();
+    var dx = e.clientX - r.left - stick.x, dy = e.clientY - r.top - stick.y;
+    var len = Math.hypot(dx, dy), k = len > RADIUS ? RADIUS / len : 1;
+    knob.style.transform = 'translate(' + dx * k + 'px, ' + dy * k + 'px)';
+    vector = { x: Math.round(dx * k / RADIUS * 100) / 100, y: Math.round(dy * k / RADIUS * 100) / 100 };
+    queue();
+  });
+  function release(e) {
+    if (!stick || e.pointerId !== stick.id) return;
+    stick = null;
+    zone.classList.remove('steering');
+    vector = { x: 0, y: 0 };
+    queue();
+  }
+  zone.addEventListener('pointerup', release);
+  zone.addEventListener('pointercancel', release);
+
+  // ---- FIRE: fires on press, and keeps firing while held
+  var fire = $('fire'), autofire = 0;
+  fire.addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    fire.classList.add('down');
+    toScreen({ t: 'f' });
+    clearInterval(autofire);
+    autofire = setInterval(function () { toScreen({ t: 'f' }); }, 260);
+  });
+  function stopFire() { fire.classList.remove('down'); clearInterval(autofire); }
+  fire.addEventListener('pointerup', stopFire);
+  fire.addEventListener('pointercancel', stopFire);
+  fire.addEventListener('pointerleave', stopFire);
+})();
+</script>
+</body>
+</html>
